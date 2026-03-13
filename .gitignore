@@ -1,0 +1,4 @@
+node_modules/
+backend/apigee_inventory.db
+backend/.env
+frontend/build/

@@ -29,7 +29,10 @@ function Home() {
               <span className="stat-label">Parallel Fetch</span>
             </div>
           </div>
-          <button className="btn-get-started" onClick={() => navigate("/dashboard")}>
+          <button
+            className="btn-get-started"
+            onClick={() => navigate("/dashboard?sync=true")}
+          >
             Get Started
           </button>
         </div>
@@ -53,13 +56,13 @@ function Home() {
       <div className="features">
         <div className="feature-card">
           <div className="feature-icon">01</div>
-          <h3>Generate Token</h3>
-          <p>Authenticate with Apigee OAuth to get secure access for API management operations.</p>
+          <h3>Auto Sync</h3>
+          <p>One click to auto-authenticate, fetch all proxies and revisions from Apigee.</p>
         </div>
         <div className="feature-card">
           <div className="feature-icon">02</div>
-          <h3>Fetch Proxies</h3>
-          <p>Fetch all API proxies and their revisions with 100x parallel processing speed.</p>
+          <h3>Filtered Data</h3>
+          <p>Only stores relevant proxies - EazyPay, composite, CIB, NPCI, D365.</p>
         </div>
         <div className="feature-card">
           <div className="feature-icon">03</div>

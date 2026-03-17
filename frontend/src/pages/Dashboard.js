@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 
 const API_BASE = "http://localhost:5000";
@@ -12,35 +13,51 @@ function formatEpoch(epoch) {
 }
 
 function Dashboard() {
-  const [tokenStatus, setTokenStatus] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [proxies, setProxies] = useState([]);
-  const [loading, setLoading] = useState({ token: false, proxy: false, revisions: false, detail: false });
+  const [loading, setLoading] = useState({ syncing: false, revisions: false, detail: false });
   const [error, setError] = useState(null);
   const [stats, setStats] = useState(null);
   const [search, setSearch] = useState("");
   const [popup, setPopup] = useState(null);
-  const [activeView, setActiveView] = useState("actions");
   const [currentPage, setCurrentPage] = useState(1);
   const dataLoaded = useRef(false);
 
   // Revision page state
-  const [revisionPage, setRevisionPage] = useState(null); // { proxyName, revisions[] }
-  const [detailPage, setDetailPage] = useState(null);     // { revision object }
+  const [revisionPage, setRevisionPage] = useState(null);
+  const [detailPage, setDetailPage] = useState(null);
 
-  // Load data from DB once on mount
+  const loadFromDB = async () => {
+    try {
+      const [listRes, countRes] = await Promise.all([
+        axios.get(`${API_BASE}/api/proxy-list`),
+        axios.get(`${API_BASE}/api/proxies/count`),
+      ]);
+      setProxies(listRes.data.proxies);
+      if (countRes.data.total > 0) {
+        setStats({ total: countRes.data.total });
+      }
+    } catch (err) {}
+  };
+
+  // Load data on mount + auto-sync if ?sync=true
   useEffect(() => {
     if (!dataLoaded.current) {
       dataLoaded.current = true;
-      axios.get(`${API_BASE}/api/proxy-list`)
-        .then((res) => setProxies(res.data.proxies))
-        .catch(() => {});
-      axios.get(`${API_BASE}/api/proxies/count`)
-        .then((res) => {
-          if (res.data.total > 0) {
-            setStats({ total: res.data.total, time: null });
-          }
-        })
-        .catch(() => {});
+
+      if (searchParams.get("sync") === "true") {
+        // Remove sync param from URL
+        setSearchParams({}, { replace: true });
+
+        // Start sync with loader
+        setLoading((p) => ({ ...p, syncing: true }));
+        axios.post(`${API_BASE}/api/sync`, {}, { timeout: 0 })
+          .then(() => loadFromDB())
+          .catch(() => loadFromDB())
+          .finally(() => setLoading((p) => ({ ...p, syncing: false })));
+      } else {
+        loadFromDB();
+      }
     }
   }, []);
 
@@ -49,56 +66,26 @@ function Dashboard() {
     setTimeout(() => setPopup(null), 4000);
   };
 
-  const generateToken = async () => {
-    setLoading((p) => ({ ...p, token: true }));
-    setError(null);
-    try {
-      const res = await axios.post(`${API_BASE}/api/token`);
-      setTokenStatus(res.data);
-      showPopup("success", "Token Generated", `Token active - expires in ${res.data.expires_in}s`);
-    } catch (err) {
-      const msg = err.response?.data?.message || "Failed to generate token";
-      setError(msg);
-      showPopup("error", "Token Failed", msg);
-    } finally {
-      setLoading((p) => ({ ...p, token: false }));
-    }
-  };
-
-  const generateProxies = async () => {
-    setLoading((p) => ({ ...p, proxy: true }));
-    setError(null);
-    setStats(null);
-    try {
-      const start = Date.now();
-      const res = await axios.get(`${API_BASE}/api/proxies`, { timeout: 0 });
-      const time = ((Date.now() - start) / 1000).toFixed(1);
-      setStats({ total: res.data.total_rows, time });
-      const listRes = await axios.get(`${API_BASE}/api/proxy-list`);
-      setProxies(listRes.data.proxies);
-      showPopup("success", "Proxies Fetched", `${res.data.total_rows} rows saved in ${time}s`);
-      setActiveView("proxies");
-    } catch (err) {
-      const msg = err.response?.data?.message || "Failed to fetch proxies";
-      setError(msg);
-      showPopup("error", "Fetch Failed", msg);
-    } finally {
-      setLoading((p) => ({ ...p, proxy: false }));
-    }
-  };
-
-  const showProxiesView = () => {
-    setActiveView("proxies");
-    setCurrentPage(1);
-  };
-
   const openRevisionPage = async (proxyName) => {
-    setRevisionPage({ proxyName, revisions: [] });
+    setRevisionPage({ proxyName, revisions: [], deployments: {} });
     setDetailPage(null);
     setLoading((p) => ({ ...p, revisions: true }));
     try {
-      const res = await axios.get(`${API_BASE}/api/proxies/${encodeURIComponent(proxyName)}/revisions`);
-      setRevisionPage({ proxyName, revisions: res.data.revisions });
+      const [revRes, depRes] = await Promise.all([
+        axios.get(`${API_BASE}/api/proxies/${encodeURIComponent(proxyName)}/revisions`),
+        axios.get(`${API_BASE}/api/proxies/${encodeURIComponent(proxyName)}/deployments`),
+      ]);
+
+      // Build map: revision_number -> [env1, env2, ...]
+      const depMap = {};
+      if (depRes.data.deployments) {
+        for (const d of depRes.data.deployments) {
+          if (!depMap[d.revision_number]) depMap[d.revision_number] = [];
+          depMap[d.revision_number].push(d.environment);
+        }
+      }
+
+      setRevisionPage({ proxyName, revisions: revRes.data.revisions, deployments: depMap });
     } catch (err) {
       showPopup("error", "Error", err.response?.data?.message || "Failed to fetch revisions");
     } finally {
@@ -213,21 +200,31 @@ function Dashboard() {
             </div>
           ) : revisionPage.revisions.length > 0 ? (
             <div className="revision-list">
-              {revisionPage.revisions.map((r) => (
-                <div className="revision-row" key={r.revision_number}>
-                  <div className="revision-row-left">
-                    <span className="revision-badge">Rev {r.revision_number}</span>
-                    <span className="revision-row-label">Revision {r.revision_number}</span>
+              {revisionPage.revisions.map((r) => {
+                const envs = revisionPage.deployments[r.revision_number] || [];
+                return (
+                  <div className="revision-row" key={r.revision_number}>
+                    <div className="revision-row-left">
+                      <span className="revision-badge">Rev {r.revision_number}</span>
+                      <span className="revision-row-label">Revision {r.revision_number}</span>
+                      {envs.length > 0 && (
+                        <div className="env-tags">
+                          {envs.map((env) => (
+                            <span className="env-tag" key={env}>{env}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      className="btn-see-more"
+                      onClick={() => openDetailPage(revisionPage.proxyName, r.revision_number)}
+                      disabled={loading.detail}
+                    >
+                      {loading.detail ? "Loading..." : "See More"}
+                    </button>
                   </div>
-                  <button
-                    className="btn-see-more"
-                    onClick={() => openDetailPage(revisionPage.proxyName, r.revision_number)}
-                    disabled={loading.detail}
-                  >
-                    {loading.detail ? "Loading..." : "See More"}
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div className="overlay-loading">
@@ -239,7 +236,7 @@ function Dashboard() {
     );
   }
 
-  // ==================== MAIN DASHBOARD ====================
+  // ==================== MAIN DASHBOARD — PROXIES VIEW ====================
   return (
     <div className="dashboard-layout">
       {/* Popup Notification */}
@@ -258,19 +255,7 @@ function Dashboard() {
       <aside className="sidebar">
         <div className="sidebar-section">
           <div className="sidebar-label">MENU</div>
-          <button
-            className={`sidebar-btn ${activeView === "actions" ? "sidebar-active" : ""}`}
-            onClick={() => setActiveView("actions")}
-          >
-            <span className="sidebar-icon">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-            </span>
-            Dashboard
-          </button>
-          <button
-            className={`sidebar-btn ${activeView === "proxies" ? "sidebar-active" : ""}`}
-            onClick={showProxiesView}
-          >
+          <button className="sidebar-btn sidebar-active">
             <span className="sidebar-icon">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
             </span>
@@ -279,10 +264,6 @@ function Dashboard() {
         </div>
         <div className="sidebar-section">
           <div className="sidebar-label">STATUS</div>
-          <div className="sidebar-status">
-            <span className={`status-dot ${tokenStatus?.success ? "dot-green" : "dot-gray"}`}></span>
-            Token: {tokenStatus?.success ? "Active" : "Inactive"}
-          </div>
           <div className="sidebar-status">
             <span className={`status-dot ${proxies.length > 0 ? "dot-green" : "dot-gray"}`}></span>
             Proxies: {proxies.length || 0}
@@ -298,176 +279,114 @@ function Dashboard() {
 
       {/* Main Content */}
       <main className="dashboard-main">
-        {/* Actions View */}
-        {activeView === "actions" && (
-          <>
-            {/* Loader - only on actions view */}
-            {(loading.token || loading.proxy) && (
-              <div className="main-loader">
-                <div className="loader-content">
-                  <div className="spinner"></div>
-                  <p className="loader-title">
-                    {loading.token ? "Generating Token..." : "Fetching Proxies & Revisions..."}
-                  </p>
-                  <p className="loader-sub">
-                    {loading.token
-                      ? "Authenticating with Apigee OAuth"
-                      : "This may take a couple of minutes. Please wait."}
-                  </p>
-                </div>
-              </div>
-            )}
-
-            <div className="dashboard-header">
-              <h1>Dashboard</h1>
-              <p className="dashboard-subtitle">Manage your Apigee API proxies and revisions</p>
+        {/* Sync Loader */}
+        {loading.syncing && (
+          <div className="main-loader">
+            <div className="loader-content">
+              <div className="spinner"></div>
+              <p className="loader-title">Syncing Data from Apigee...</p>
+              <p className="loader-sub">Auto-generating token and fetching proxies. Please wait.</p>
             </div>
-
-            <div className="action-cards">
-              <div className="action-card">
-                <div className="action-card-header">
-                  <span className="action-step">Step 1</span>
-                  <h3>Authentication</h3>
-                </div>
-                <p>Generate OAuth token to access Apigee Management API</p>
-                <button className="btn-action" onClick={generateToken} disabled={loading.token}>
-                  Generate Token
-                </button>
-                {tokenStatus?.success && (
-                  <div className="action-status success">
-                    Token active - expires in {tokenStatus.expires_in}s
-                  </div>
-                )}
-              </div>
-
-              <div className="action-card">
-                <div className="action-card-header">
-                  <span className="action-step">Step 2</span>
-                  <h3>Fetch Data</h3>
-                </div>
-                <p>Fetch all proxies and revision details from Apigee</p>
-                <button className="btn-action" onClick={generateProxies} disabled={loading.proxy || !tokenStatus?.success}>
-                  Generate Proxies
-                </button>
-                {stats && (
-                  <div className="action-status success">
-                    {stats.total} rows saved{stats.time ? ` in ${stats.time}s` : ""}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {error && (
-              <div className="alert error">
-                {error}
-                <button className="alert-close" onClick={() => setError(null)}>x</button>
-              </div>
-            )}
-          </>
+          </div>
         )}
 
-        {/* Proxies View */}
-        {activeView === "proxies" && (
-          <>
-            <div className="dashboard-header">
-              <h1>API Proxies</h1>
-              <p className="dashboard-subtitle">Browse proxies and explore revision details from database</p>
+        <div className="dashboard-header">
+          <h1>API Proxies</h1>
+          <p className="dashboard-subtitle">Browse proxies and explore revision details from database</p>
+        </div>
+
+        {error && (
+          <div className="alert error">
+            {error}
+            <button className="alert-close" onClick={() => setError(null)}>x</button>
+          </div>
+        )}
+
+        {proxies.length > 0 && (
+          <div className="table-section">
+            <div className="table-header">
+              <h2>Proxies <span className="badge">{filteredProxies.length}</span></h2>
+              <input
+                type="text"
+                className="search-input"
+                placeholder="Search proxy name..."
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
+              />
+            </div>
+            <div className="table-wrapper">
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Proxy Name</th>
+                    <th>Timestamp</th>
+                    <th>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedProxies.map((p) => (
+                    <tr key={p.proxy_name}>
+                      <td>{p.id}</td>
+                      <td className="proxy-name-cell">{p.proxy_name}</td>
+                      <td>{new Date(p.timestamp).toLocaleString()}</td>
+                      <td>
+                        <button
+                          className="btn-check-revision"
+                          onClick={() => openRevisionPage(p.proxy_name)}
+                        >
+                          Check Revision
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
 
-            {error && (
-              <div className="alert error">
-                {error}
-                <button className="alert-close" onClick={() => setError(null)}>x</button>
-              </div>
-            )}
-
-            {proxies.length > 0 && (
-              <div className="table-section">
-                <div className="table-header">
-                  <h2>Proxies <span className="badge">{filteredProxies.length}</span></h2>
-                  <input
-                    type="text"
-                    className="search-input"
-                    placeholder="Search proxy name..."
-                    value={search}
-                    onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }}
-                  />
-                </div>
-                <div className="table-wrapper">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>ID</th>
-                        <th>Proxy Name</th>
-                        <th>Timestamp</th>
-                        <th>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {paginatedProxies.map((p) => (
-                        <tr key={p.proxy_name}>
-                          <td>{p.id}</td>
-                          <td className="proxy-name-cell">{p.proxy_name}</td>
-                          <td>{new Date(p.timestamp).toLocaleString()}</td>
-                          <td>
-                            <button
-                              className="btn-check-revision"
-                              onClick={() => openRevisionPage(p.proxy_name)}
-                            >
-                              Check Revision
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {totalPages > 1 && (
-                  <div className="pagination">
+            {totalPages > 1 && (
+              <div className="pagination">
+                <button
+                  className="pagination-btn"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Previous
+                </button>
+                <div className="pagination-pages">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
                     <button
-                      className="pagination-btn"
-                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                      disabled={currentPage === 1}
+                      key={page}
+                      className={`pagination-page ${currentPage === page ? "pagination-active" : ""}`}
+                      onClick={() => setCurrentPage(page)}
                     >
-                      Previous
+                      {page}
                     </button>
-                    <div className="pagination-pages">
-                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                        <button
-                          key={page}
-                          className={`pagination-page ${currentPage === page ? "pagination-active" : ""}`}
-                          onClick={() => setCurrentPage(page)}
-                        >
-                          {page}
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      className="pagination-btn"
-                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                      disabled={currentPage === totalPages}
-                    >
-                      Next
-                    </button>
-                    <span className="pagination-info">
-                      {(currentPage - 1) * ROWS_PER_PAGE + 1}–{Math.min(currentPage * ROWS_PER_PAGE, filteredProxies.length)} of {filteredProxies.length}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {proxies.length === 0 && (
-              <div className="empty-state">
-                <div className="empty-icon">
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="1.5"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+                  ))}
                 </div>
-                <h3>No Data Found</h3>
-                <p>Go to Dashboard and generate proxies first, or data will load automatically if already saved.</p>
+                <button
+                  className="pagination-btn"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Next
+                </button>
+                <span className="pagination-info">
+                  {(currentPage - 1) * ROWS_PER_PAGE + 1}-{Math.min(currentPage * ROWS_PER_PAGE, filteredProxies.length)} of {filteredProxies.length}
+                </span>
               </div>
             )}
-          </>
+          </div>
+        )}
+
+        {proxies.length === 0 && (
+          <div className="empty-state">
+            <div className="empty-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="1.5"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+            </div>
+            <h3>No Data Found</h3>
+            <p>Click the settings icon in the navbar and use "Sync Now" to fetch proxy data from Apigee.</p>
+          </div>
         )}
       </main>
     </div>

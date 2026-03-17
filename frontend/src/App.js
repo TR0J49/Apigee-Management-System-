@@ -26,7 +26,7 @@ function App() {
   };
 
   return (
-    <Router>
+    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Navbar isLoggedIn={isLoggedIn} onLogin={handleLogin} onLogout={handleLogout} onSyncComplete={handleSyncComplete} />
       <Routes>
         <Route path="/" element={<Home isLoggedIn={isLoggedIn} />} />

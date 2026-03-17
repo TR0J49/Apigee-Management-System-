@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from "react";
-import { useSearchParams } from "react-router-dom";
 import axios from "axios";
 
 const API_BASE = "http://localhost:5000";
@@ -12,8 +11,7 @@ function formatEpoch(epoch) {
   return new Date(num).toLocaleString();
 }
 
-function Dashboard() {
-  const [searchParams, setSearchParams] = useSearchParams();
+function Dashboard({ syncVersion }) {
   const [proxies, setProxies] = useState([]);
   const [loading, setLoading] = useState({ syncing: false, revisions: false, detail: false });
   const [error, setError] = useState(null);
@@ -40,26 +38,20 @@ function Dashboard() {
     } catch (err) {}
   };
 
-  // Load data on mount + auto-sync if ?sync=true
+  // Load data from DB on mount (no sync)
   useEffect(() => {
     if (!dataLoaded.current) {
       dataLoaded.current = true;
-
-      if (searchParams.get("sync") === "true") {
-        // Remove sync param from URL
-        setSearchParams({}, { replace: true });
-
-        // Start sync with loader
-        setLoading((p) => ({ ...p, syncing: true }));
-        axios.post(`${API_BASE}/api/sync`, {}, { timeout: 0 })
-          .then(() => loadFromDB())
-          .catch(() => loadFromDB())
-          .finally(() => setLoading((p) => ({ ...p, syncing: false })));
-      } else {
-        loadFromDB();
-      }
+      loadFromDB();
     }
   }, []);
+
+  // Reload data when sync completes (syncVersion changes)
+  useEffect(() => {
+    if (syncVersion > 0) {
+      loadFromDB();
+    }
+  }, [syncVersion]);
 
   const showPopup = (type, title, message) => {
     setPopup({ type, title, message });
@@ -279,17 +271,6 @@ function Dashboard() {
 
       {/* Main Content */}
       <main className="dashboard-main">
-        {/* Sync Loader */}
-        {loading.syncing && (
-          <div className="main-loader">
-            <div className="loader-content">
-              <div className="spinner"></div>
-              <p className="loader-title">Syncing Data from Apigee...</p>
-              <p className="loader-sub">Auto-generating token and fetching proxies. Please wait.</p>
-            </div>
-          </div>
-        )}
-
         <div className="dashboard-header">
           <h1>API Proxies</h1>
           <p className="dashboard-subtitle">Browse proxies and explore revision details from database</p>

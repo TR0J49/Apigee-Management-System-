@@ -1,8 +1,18 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 
-function Home() {
+function Home({ isLoggedIn }) {
   const navigate = useNavigate();
+
+  const handleGetStarted = () => {
+    if (isLoggedIn) {
+      navigate("/dashboard");
+    } else {
+      // Trigger settings dropdown click to prompt login
+      const settingsBtn = document.querySelector(".settings-btn");
+      if (settingsBtn) settingsBtn.click();
+    }
+  };
 
   return (
     <div className="home">
@@ -31,9 +41,9 @@ function Home() {
           </div>
           <button
             className="btn-get-started"
-            onClick={() => navigate("/dashboard?sync=true")}
+            onClick={handleGetStarted}
           >
-            Get Started
+            {isLoggedIn ? "Get Started" : "Login to Get Started"}
           </button>
         </div>
         <div className="hero-visual">

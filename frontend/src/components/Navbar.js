@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import axios from "axios";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "";
 
 const VALID_EMAIL = "readonly@ext.icici.bank.in";
 const VALID_PASSWORD = "Apigee@2028";

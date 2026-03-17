@@ -1,0 +1,7 @@
+node_modules
+npm-debug.log
+.env
+apigee_inventory.db
+apigee_inventory.db-shm
+apigee_inventory.db-wal
+shubh.txt

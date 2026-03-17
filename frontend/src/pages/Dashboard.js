@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = "";
 const ROWS_PER_PAGE = 1000;
 
 function formatEpoch(epoch) {

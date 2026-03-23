@@ -11,7 +11,7 @@ function formatEpoch(epoch) {
   return new Date(num).toLocaleString();
 }
 
-function Dashboard({ syncVersion }) {
+function Dashboard({ syncVersion, isSyncing, triggerSync }) {
   const [proxies, setProxies] = useState([]);
   const [loading, setLoading] = useState({ syncing: false, revisions: false, detail: false });
   const [error, setError] = useState(null);
@@ -38,15 +38,16 @@ function Dashboard({ syncVersion }) {
     } catch (err) {}
   };
 
-  // Load data from DB on mount (no sync)
+  // Auto-sync on mount — always fetch fresh data from Apigee
   useEffect(() => {
     if (!dataLoaded.current) {
       dataLoaded.current = true;
+      if (triggerSync) triggerSync();
       loadFromDB();
     }
-  }, []);
+  }, [triggerSync]);
 
-  // Reload data when sync completes (syncVersion changes)
+  // Auto-refresh when sync completes
   useEffect(() => {
     if (syncVersion > 0) {
       loadFromDB();
@@ -97,7 +98,60 @@ function Dashboard({ syncVersion }) {
     }
   };
 
+  const [downloading, setDownloading] = useState({});
+  const autoDownloadDone = useRef(new Set());
+
+  const downloadBundle = async (proxyName, revNumber, envs) => {
+    const key = `${proxyName}::${revNumber}`;
+    setDownloading((prev) => ({ ...prev, [key]: true }));
+    try {
+      const res = await axios.get(
+        `${API_BASE}/api/proxies/${encodeURIComponent(proxyName)}/revisions/${revNumber}/download`,
+        { responseType: "blob" }
+      );
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const envSuffix = envs && envs.length > 0 ? `_${envs.join("_")}` : "";
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `${proxyName}_rev${revNumber}${envSuffix}.zip`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      showPopup("error", "Download Failed", `${proxyName} rev${revNumber}: ${err.response?.data?.message || "Could not download bundle"}`);
+    } finally {
+      setDownloading((prev) => { const n = { ...prev }; delete n[key]; return n; });
+    }
+  };
+
+  // Auto-download all deployed revisions when revision page loads
+  useEffect(() => {
+    if (!revisionPage || !revisionPage.revisions.length || loading.revisions) return;
+    const { proxyName, revisions, deployments } = revisionPage;
+    const pageKey = proxyName;
+    if (autoDownloadDone.current.has(pageKey)) return;
+    autoDownloadDone.current.add(pageKey);
+
+    const deployedRevs = revisions.filter((r) => {
+      const envs = deployments[r.revision_number] || [];
+      return envs.length > 0;
+    });
+
+    if (deployedRevs.length === 0) return;
+    showPopup("success", "Auto Downloading", `${deployedRevs.length} deployed revision(s) for ${proxyName}`);
+
+    // Download one by one to avoid browser blocking multiple downloads
+    (async () => {
+      for (const r of deployedRevs) {
+        const envs = deployments[r.revision_number] || [];
+        await downloadBundle(proxyName, r.revision_number, envs);
+      }
+    })();
+  }, [revisionPage, loading.revisions]);
+
   const closeRevisionPage = () => {
+    autoDownloadDone.current.clear();
     setRevisionPage(null);
     setDetailPage(null);
   };
@@ -207,13 +261,30 @@ function Dashboard({ syncVersion }) {
                         </div>
                       )}
                     </div>
-                    <button
-                      className="btn-see-more"
-                      onClick={() => openDetailPage(revisionPage.proxyName, r.revision_number)}
-                      disabled={loading.detail}
-                    >
-                      {loading.detail ? "Loading..." : "See More"}
-                    </button>
+                    <div className="revision-row-actions">
+                      {envs.length > 0 && (
+                        <button
+                          className="btn-download-bundle"
+                          onClick={() => downloadBundle(revisionPage.proxyName, r.revision_number, envs)}
+                          disabled={!!downloading[`${revisionPage.proxyName}::${r.revision_number}`]}
+                          title="Download proxy bundle ZIP"
+                        >
+                          {downloading[`${revisionPage.proxyName}::${r.revision_number}`] ? (
+                            <span className="spinner-small"></span>
+                          ) : (
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                          )}
+                          Download
+                        </button>
+                      )}
+                      <button
+                        className="btn-see-more"
+                        onClick={() => openDetailPage(revisionPage.proxyName, r.revision_number)}
+                        disabled={loading.detail}
+                      >
+                        {loading.detail ? "Loading..." : "See More"}
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -231,6 +302,17 @@ function Dashboard({ syncVersion }) {
   // ==================== MAIN DASHBOARD — PROXIES VIEW ====================
   return (
     <div className="dashboard-layout">
+      {/* Sync Loader Overlay */}
+      {isSyncing && (
+        <div className="loader-overlay">
+          <div className="loader-content">
+            <div className="spinner"></div>
+            <div className="loader-title">Syncing from Apigee</div>
+            <div className="loader-sub">Fetching proxies, revisions & deployments...</div>
+          </div>
+        </div>
+      )}
+
       {/* Popup Notification */}
       {popup && (
         <div className={`popup popup-${popup.type}`}>

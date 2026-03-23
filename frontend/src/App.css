@@ -1213,6 +1213,43 @@ tr.row-selected td {
   letter-spacing: 0.3px;
 }
 
+.revision-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.btn-download-bundle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  background: #fff;
+  color: #155724;
+  border: 1px solid #28a745;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.btn-download-bundle:hover:not(:disabled) {
+  background: #28a745;
+  color: #fff;
+}
+
+.btn-download-bundle:hover:not(:disabled) svg {
+  stroke: #fff;
+}
+
+.btn-download-bundle:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .btn-see-more {
   padding: 8px 22px;
   background: #fff;

@@ -16,14 +16,7 @@ router.get("/:proxyName/revisions", async (req, res) => {
       return res.json({ success: true, revisions: cached, from_cache: true });
     }
 
-    const result = await pool.query(
-      `SELECT r.revision_number
-       FROM revisions r
-       JOIN proxies p ON p.id = r.proxy_id
-       WHERE p.proxy_name = $1
-       ORDER BY r.revision_number::int ASC`,
-      [proxyName]
-    );
+    const result = await pool.query("SELECT * FROM sp_get_revisions($1)", [proxyName]);
 
     revisionListCache.set(proxyName, result.rows);
     res.json({ success: true, revisions: result.rows });
@@ -43,14 +36,7 @@ router.get("/:proxyName/revisions/:revNumber", async (req, res) => {
       return res.json({ success: true, revision: cached, from_cache: true });
     }
 
-    const result = await pool.query(
-      `SELECT r.id, p.proxy_name, r.revision_number, r.created_at, r.created_by,
-              r.last_modified_at, r.last_modified_by, r.timestamp
-       FROM revisions r
-       JOIN proxies p ON p.id = r.proxy_id
-       WHERE p.proxy_name = $1 AND r.revision_number = $2`,
-      [proxyName, revNumber]
-    );
+    const result = await pool.query("SELECT * FROM sp_get_revision_detail($1, $2)", [proxyName, revNumber]);
 
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: "Revision not found" });
@@ -77,10 +63,8 @@ router.get("/:proxyName/revisions/:revNumber", async (req, res) => {
             last_modified_by: apiRes.data.lastModifiedBy || "",
           };
 
-          await pool.query(
-            `UPDATE revisions SET created_at = $1, created_by = $2, last_modified_at = $3, last_modified_by = $4
-             WHERE id = $5`,
-            [detail.created_at, detail.created_by, detail.last_modified_at, detail.last_modified_by, row.id]
+          await pool.query("SELECT sp_update_revision_detail($1, $2, $3, $4, $5)",
+            [row.id, detail.created_at, detail.created_by, detail.last_modified_at, detail.last_modified_by]
           );
 
           row.created_at = detail.created_at;

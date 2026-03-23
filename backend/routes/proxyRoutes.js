@@ -42,16 +42,9 @@ router.get("/", async (req, res) => {
       }
     }
 
-    // Delta sync
-    const existingResult = await pool.query(
-      `SELECT p.proxy_name, r.revision_number FROM revisions r JOIN proxies p ON p.id = r.proxy_id`
-    );
-    const existingSet = new Set(existingResult.rows.map((r) => `${r.proxy_name}::${r.revision_number}`));
-    const newPairs = allRevisionPairs.filter((pair) => !existingSet.has(`${pair.name}::${pair.rev}`));
-
     let rows = [];
-    if (newPairs.length > 0) {
-      const detailResults = await concurrentPool(newPairs, 200, async (pair) => {
+    if (allRevisionPairs.length > 0) {
+      const detailResults = await concurrentPool(allRevisionPairs, 200, async (pair) => {
         const r = await axios.get(`${baseUrl}/${encodeURIComponent(pair.name)}/revisions/${pair.rev}`, { headers });
         return {
           proxy_name: pair.name,
@@ -68,76 +61,24 @@ router.get("/", async (req, res) => {
     }
 
     if (rows.length > 0) {
-      const client = await pool.connect();
-      try {
-        await client.query("BEGIN");
+      const uniqueNames = [...new Set(rows.map((r) => r.proxy_name))];
+      const idResult = await pool.query("SELECT * FROM sp_upsert_proxies($1)", [uniqueNames]);
+      const proxyIdMap = {};
+      for (const row of idResult.rows) proxyIdMap[row.out_proxy_name] = row.out_id;
 
-        const uniqueNames = [...new Set(rows.map((r) => r.proxy_name))];
-        const nameValues = [];
-        const namePlaceholders = [];
-        uniqueNames.forEach((name, i) => {
-          namePlaceholders.push(`($${i + 1})`);
-          nameValues.push(name);
-        });
-        await client.query(
-          `INSERT INTO proxies (proxy_name) VALUES ${namePlaceholders.join(", ")}
-           ON CONFLICT (proxy_name) DO UPDATE SET timestamp = CURRENT_TIMESTAMP`,
-          nameValues
-        );
-
-        const idResult = await client.query(
-          `SELECT id, proxy_name FROM proxies WHERE proxy_name = ANY($1)`,
-          [uniqueNames]
-        );
-        const proxyIdMap = {};
-        for (const row of idResult.rows) proxyIdMap[row.proxy_name] = row.id;
-
-        const batchSize = 1000;
-        for (let i = 0; i < rows.length; i += batchSize) {
-          const batch = rows.slice(i, i + batchSize);
-          const values = [];
-          const placeholders = [];
-          let idx = 1;
-          for (const rev of batch) {
-            placeholders.push(`($${idx}, $${idx+1}, $${idx+2}, $${idx+3}, $${idx+4}, $${idx+5})`);
-            values.push(proxyIdMap[rev.proxy_name], rev.revision_number, rev.created_at, rev.created_by, rev.last_modified_at, rev.last_modified_by);
-            idx += 6;
-          }
-          await client.query(
-            `INSERT INTO revisions (proxy_id, revision_number, created_at, created_by, last_modified_at, last_modified_by)
-             VALUES ${placeholders.join(", ")}
-             ON CONFLICT (proxy_id, revision_number) DO UPDATE SET
-               created_at = EXCLUDED.created_at, created_by = EXCLUDED.created_by,
-               last_modified_at = EXCLUDED.last_modified_at, last_modified_by = EXCLUDED.last_modified_by,
-               timestamp = CURRENT_TIMESTAMP`,
-            values
-          );
-        }
-
-        await client.query("COMMIT");
-      } catch (txErr) {
-        await client.query("ROLLBACK");
-        throw txErr;
-      } finally {
-        client.release();
-      }
+      const proxyIds = rows.map((r) => proxyIdMap[r.proxy_name]);
+      const revNumbers = rows.map((r) => r.revision_number);
+      await pool.query("SELECT sp_insert_revisions($1, $2)", [proxyIds, revNumbers]);
     }
     console.timeEnd("TOTAL");
 
     revisionCache.clear();
     revisionListCache.clear();
 
-    const countResult = await pool.query("SELECT COUNT(*) AS total FROM revisions");
-    const totalRows = parseInt(countResult.rows[0].total);
-
-    res.json({
-      success: true,
-      total_rows: totalRows,
-    });
+    const result = await pool.query("SELECT sp_get_revision_count() AS total");
+    res.json({ success: true, total_rows: parseInt(result.rows[0].total) });
   } catch (error) {
-    console.error("Proxy fetch failed:");
-    console.error("Status:", error.response?.status);
-    console.error("Message:", error.message);
+    console.error("Proxy fetch failed:", error.message);
     res.status(500).json({
       success: false,
       message: "Failed to fetch proxies",
@@ -149,7 +90,7 @@ router.get("/", async (req, res) => {
 // GET /api/proxies/count
 router.get("/count", async (req, res) => {
   try {
-    const result = await pool.query("SELECT COUNT(*) AS total FROM revisions");
+    const result = await pool.query("SELECT sp_get_revision_count() AS total");
     res.json({ success: true, total: parseInt(result.rows[0].total) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });

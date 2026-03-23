@@ -7,7 +7,7 @@ const API_BASE = "";
 const VALID_EMAIL = "readonly@ext.icici.bank.in";
 const VALID_PASSWORD = "Apigee@2028";
 
-function Navbar({ isLoggedIn, onLogin, onLogout, onSyncComplete }) {
+function Navbar({ isLoggedIn, onLogin, onLogout, onSyncComplete, onSyncStart, onSyncEnd }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [showDropdown, setShowDropdown] = useState(false);
@@ -43,24 +43,27 @@ function Navbar({ isLoggedIn, onLogin, onLogout, onSyncComplete }) {
       setShowDropdown(false);
       setLoginError("");
 
-      // Background sync - no loader, only popup notification
-      setSyncing(true);
-      showPopup("success", "Login Successful", "Syncing data from Apigee in background...");
-
-      axios.post(`${API_BASE}/api/sync`, {}, { timeout: 0 })
-        .then((res) => {
-          showPopup("success", "Sync Complete", `Proxies: ${res.data.proxies}, Revisions: ${res.data.revisions}, Deployments: ${res.data.deployments}`);
-          if (onSyncComplete) onSyncComplete();
-        })
-        .catch(() => {
-          showPopup("error", "Sync Failed", "Background sync failed. Data may still be available from database.");
-        })
-        .finally(() => setSyncing(false));
-
-      navigate("/dashboard");
+      // Start sync IMMEDIATELY on login — data ready before user clicks "Get Started"
+      showPopup("success", "Login Successful", "Syncing data in background...");
+      handleSync();
     } else {
       setLoginError("Invalid email or password");
     }
+  };
+
+  const handleSync = () => {
+    setSyncing(true);
+    if (onSyncStart) onSyncStart();
+    showPopup("success", "Sync Started", "Syncing data in background...");
+    axios.post(`${API_BASE}/api/sync`, {}, { timeout: 0 })
+      .then((res) => {
+        showPopup("success", "Sync Complete", `Proxies: ${res.data.proxies}, Revisions: ${res.data.revisions}, Deployments: ${res.data.deployments}`);
+        if (onSyncComplete) onSyncComplete();
+      })
+      .catch(() => {
+        showPopup("error", "Sync Failed", "Data may still be available from database.");
+      })
+      .finally(() => { setSyncing(false); if (onSyncEnd) onSyncEnd(); });
   };
 
   const handleLogout = () => {
@@ -170,6 +173,18 @@ function Navbar({ isLoggedIn, onLogin, onLogout, onSyncComplete }) {
                             <div className="admin-email">{email || VALID_EMAIL}</div>
                           </div>
                         </div>
+                        <button className="admin-sync-btn" onClick={handleSync} disabled={syncing} style={{ marginBottom: 10 }}>
+                          {syncing ? (
+                            <span className="spinner-small"></span>
+                          ) : (
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="23 4 23 10 17 10"/>
+                              <polyline points="1 20 1 14 7 14"/>
+                              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>
+                            </svg>
+                          )}
+                          {syncing ? "Syncing..." : "Sync Now"}
+                        </button>
                         <button className="admin-logout-btn" onClick={handleLogout}>
                           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                             <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>

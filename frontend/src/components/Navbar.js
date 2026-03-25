@@ -100,11 +100,6 @@ function Navbar({ isLoggedIn, onLogin, onLogout, onSyncComplete, onSyncStart, on
               <Link to="/" className={`nav-link ${location.pathname === "/" ? "active" : ""}`}>
                 Home
               </Link>
-              {isLoggedIn && (
-                <Link to="/dashboard" className={`nav-link ${location.pathname === "/dashboard" ? "active" : ""}`}>
-                  Dashboard
-                </Link>
-              )}
             </div>
 
             {/* Settings Icon */}

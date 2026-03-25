@@ -23,12 +23,14 @@ router.get("/", async (req, res) => {
 
     console.time("TOTAL");
 
+
     const nameRes = await axios.get(baseUrl, { headers });
     const proxyNames = nameRes.data.filter(isAllowedProxy);
+    
 
-    const revListResults = await Promise.allSettled(
+    const revListResults = await Promise.allsettled(
       proxyNames.map((name) =>
-        axios.get(`${baseUrl}/${encodeURIComponent(name)}/revisions`, { headers })
+        axios.get(`${baseUrl}/${encodeURIComponent(name)}/revision`, { headers })
           .then((r) => ({ name, revisions: r.data }))
       )
     );
@@ -37,7 +39,7 @@ router.get("/", async (req, res) => {
     for (const r of revListResults) {
       if (r.status === "fulfilled") {
         for (const rev of r.value.revisions) {
-          allRevisionPairs.push({ name: r.value.name, rev });
+          allRevisionPairs.push({ name: r.value.name, rev }); 
         }
       }
     }

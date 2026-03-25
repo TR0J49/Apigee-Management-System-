@@ -28,5 +28,7 @@ class LRUCache {
 
 const revisionCache = new LRUCache(500);
 const revisionListCache = new LRUCache(200);
+// NEW: Cache for parsed proxy inventory (ZIP → XML → inventory data)
+const inventoryCache = new LRUCache(200);
 
-module.exports = { LRUCache, revisionCache, revisionListCache };
+module.exports = { LRUCache, revisionCache, revisionListCache, inventoryCache };

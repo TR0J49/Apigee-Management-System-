@@ -35,20 +35,42 @@ async function initDB() {
     )
   `);
 
+  // ========== NEW TABLE: proxy_inventory (stores parsed ZIP/XML data) ==========
+  // This table stores the extracted inventory from apiproxy/proxies/*.xml
+  // Data is populated when user clicks "See More" on a revision (lazy-load)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS proxy_inventory (
+      id SERIAL PRIMARY KEY,
+      proxy_id INTEGER NOT NULL REFERENCES proxies(id) ON DELETE CASCADE,
+      revision_number TEXT NOT NULL,
+      base_paths JSONB DEFAULT '[]',
+      virtual_hosts JSONB DEFAULT '[]',
+      flows JSONB DEFAULT '[]',
+      policies JSONB DEFAULT '[]',
+      used_policies JSONB DEFAULT '[]',
+      target_endpoints JSONB DEFAULT '[]',
+      proxy_endpoints JSONB DEFAULT '[]',
+      parsed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(proxy_id, revision_number)
+    )
+  `);
+
   // ========== INDEXES ==========
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_proxy_name ON proxies (proxy_name)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_rev_proxy_id ON revisions (proxy_id)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_rev_proxy_id_num ON revisions (proxy_id, revision_number)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_deploy_proxy_id ON deployments (proxy_id)`);
+  // NEW: Index for proxy_inventory lookups
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_inventory_proxy_rev ON proxy_inventory (proxy_id, revision_number)`);
 
   // ========== STORED PROCEDURES ==========
 
-  // 1. Truncate all tables
+  // 1. Truncate sync tables (preserve proxies, clear everything else for fresh sync)
   await pool.query(`
     CREATE OR REPLACE FUNCTION sp_truncate_all()
     RETURNS VOID AS $$
     BEGIN
-      TRUNCATE TABLE deployments, revisions, proxies RESTART IDENTITY CASCADE;
+      TRUNCATE TABLE proxy_inventory, deployments, revisions RESTART IDENTITY;
     END;
     $$ LANGUAGE plpgsql
   `);
@@ -122,6 +144,32 @@ async function initDB() {
         SELECT p.id, p.proxy_name, p.timestamp FROM proxies p
         ORDER BY p.proxy_name ASC;
       END IF;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // 6b. Get proxy list with server-side pagination
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_get_proxy_list_paginated(
+      p_search TEXT DEFAULT NULL,
+      p_limit INT DEFAULT 50,
+      p_offset INT DEFAULT 0
+    )
+    RETURNS TABLE(id INT, proxy_name TEXT, "timestamp" TIMESTAMP, total_count BIGINT) AS $$
+    BEGIN
+      RETURN QUERY
+      WITH filtered AS (
+        SELECT p.id, p.proxy_name, p.timestamp
+        FROM proxies p
+        WHERE (p_search IS NULL OR p.proxy_name ILIKE '%' || p_search || '%')
+      ),
+      counted AS (
+        SELECT COUNT(*) AS cnt FROM filtered
+      )
+      SELECT f.id, f.proxy_name, f.timestamp, c.cnt AS total_count
+      FROM filtered f, counted c
+      ORDER BY f.proxy_name ASC
+      LIMIT p_limit OFFSET p_offset;
     END;
     $$ LANGUAGE plpgsql
   `);
@@ -226,6 +274,147 @@ async function initDB() {
               unnest(p_created_bys) AS created_by, unnest(p_modified_ats) AS last_modified_at,
               unnest(p_modified_bys) AS last_modified_by) AS data
       WHERE revisions.id = data.id;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // ========== NEW STORED PROCEDURES: proxy_inventory ==========
+
+  // 15. Upsert proxy inventory (called after ZIP parse)
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_upsert_proxy_inventory(
+      p_proxy_name TEXT, p_rev_number TEXT, p_base_paths JSONB,
+      p_virtual_hosts JSONB, p_flows JSONB, p_policies JSONB,
+      p_used_policies JSONB, p_target_endpoints JSONB, p_proxy_endpoints JSONB
+    ) RETURNS VOID AS $$
+    DECLARE
+      v_proxy_id INT;
+    BEGIN
+      SELECT id INTO v_proxy_id FROM proxies WHERE proxy_name = p_proxy_name;
+      IF v_proxy_id IS NULL THEN
+        RAISE EXCEPTION 'Proxy "%" not found in proxies table', p_proxy_name;
+      END IF;
+
+      INSERT INTO proxy_inventory (proxy_id, revision_number, base_paths, virtual_hosts, flows, policies, used_policies, target_endpoints, proxy_endpoints)
+      VALUES (v_proxy_id, p_rev_number, p_base_paths, p_virtual_hosts, p_flows, p_policies, p_used_policies, p_target_endpoints, p_proxy_endpoints)
+      ON CONFLICT (proxy_id, revision_number) DO UPDATE SET
+        base_paths = EXCLUDED.base_paths, virtual_hosts = EXCLUDED.virtual_hosts,
+        flows = EXCLUDED.flows, policies = EXCLUDED.policies,
+        used_policies = EXCLUDED.used_policies,
+        target_endpoints = EXCLUDED.target_endpoints, proxy_endpoints = EXCLUDED.proxy_endpoints,
+        parsed_at = CURRENT_TIMESTAMP;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // 16. Get proxy inventory for a specific revision
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_get_proxy_inventory(p_proxy_name TEXT, p_rev_number TEXT)
+    RETURNS TABLE(id INT, base_paths JSONB, virtual_hosts JSONB, flows JSONB, policies JSONB,
+                  used_policies JSONB, target_endpoints JSONB, proxy_endpoints JSONB, parsed_at TIMESTAMP) AS $$
+    BEGIN
+      RETURN QUERY
+      SELECT pi.id, pi.base_paths, pi.virtual_hosts, pi.flows, pi.policies,
+             pi.used_policies, pi.target_endpoints, pi.proxy_endpoints, pi.parsed_at
+      FROM proxy_inventory pi JOIN proxies p ON p.id = pi.proxy_id
+      WHERE p.proxy_name = p_proxy_name AND pi.revision_number = p_rev_number;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // 17. Get all inventory rows (flattened for table display)
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_get_all_inventory(p_search TEXT DEFAULT NULL)
+    RETURNS TABLE(
+      id INT, proxy_name TEXT, revision_number TEXT,
+      base_paths JSONB, virtual_hosts JSONB, flows JSONB,
+      policies JSONB, used_policies JSONB,
+      target_endpoints JSONB, proxy_endpoints JSONB,
+      parsed_at TIMESTAMP
+    ) AS $$
+    BEGIN
+      IF p_search IS NOT NULL THEN
+        RETURN QUERY
+        SELECT pi.id, p.proxy_name, pi.revision_number,
+               pi.base_paths, pi.virtual_hosts, pi.flows,
+               pi.policies, pi.used_policies,
+               pi.target_endpoints, pi.proxy_endpoints,
+               pi.parsed_at
+        FROM proxy_inventory pi JOIN proxies p ON p.id = pi.proxy_id
+        WHERE p.proxy_name ILIKE '%' || p_search || '%'
+        ORDER BY p.proxy_name ASC, pi.revision_number::int ASC;
+      ELSE
+        RETURN QUERY
+        SELECT pi.id, p.proxy_name, pi.revision_number,
+               pi.base_paths, pi.virtual_hosts, pi.flows,
+               pi.policies, pi.used_policies,
+               pi.target_endpoints, pi.proxy_endpoints,
+               pi.parsed_at
+        FROM proxy_inventory pi JOIN proxies p ON p.id = pi.proxy_id
+        ORDER BY p.proxy_name ASC, pi.revision_number::int ASC;
+      END IF;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // 18. Get dashboard stats in one call (proxies, revisions, deployments, deployed revisions, API/flow count, inventory count)
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_get_dashboard_stats()
+    RETURNS TABLE(
+      proxy_count BIGINT, revision_count BIGINT, deployment_count BIGINT,
+      deployed_revision_count BIGINT, api_count BIGINT, inventory_count BIGINT
+    ) AS $$
+    BEGIN
+      RETURN QUERY
+      SELECT
+        (SELECT COUNT(*) FROM proxies),
+        (SELECT COUNT(*) FROM revisions),
+        (SELECT COUNT(*) FROM deployments),
+        (SELECT COUNT(DISTINCT (proxy_id, revision_number)) FROM deployments),
+        (SELECT COALESCE(SUM(jsonb_array_length(flows)), 0) FROM proxy_inventory),
+        (SELECT COUNT(*) FROM proxy_inventory);
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // 19. Get flattened inventory with server-side pagination (one row per flow)
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_get_inventory_paginated(
+      p_search TEXT DEFAULT NULL,
+      p_limit INT DEFAULT 50,
+      p_offset INT DEFAULT 0
+    )
+    RETURNS TABLE(
+      proxy_name TEXT, revision_number TEXT, endpoint TEXT, total_count BIGINT
+    ) AS $$
+    BEGIN
+      RETURN QUERY
+      WITH flattened AS (
+        SELECT
+          p.proxy_name,
+          pi.revision_number,
+          COALESCE(
+            f->>'fullPath',
+            (SELECT string_agg(bp::text, ', ') FROM jsonb_array_elements_text(pi.base_paths) bp),
+            '-'
+          ) AS endpoint
+        FROM proxy_inventory pi
+        JOIN proxies p ON p.id = pi.proxy_id
+        CROSS JOIN LATERAL (
+          SELECT f FROM jsonb_array_elements(
+            CASE WHEN jsonb_array_length(pi.flows) > 0 THEN pi.flows ELSE '[null]'::jsonb END
+          ) AS f
+        ) flows(f)
+        WHERE (p_search IS NULL OR p.proxy_name ILIKE '%' || p_search || '%')
+      ),
+      counted AS (
+        SELECT COUNT(*) AS cnt FROM flattened
+      )
+      SELECT fl.proxy_name, fl.revision_number, fl.endpoint,
+             c.cnt AS total_count
+      FROM flattened fl, counted c
+      ORDER BY fl.proxy_name ASC, fl.revision_number::int ASC
+      LIMIT p_limit OFFSET p_offset;
     END;
     $$ LANGUAGE plpgsql
   `);

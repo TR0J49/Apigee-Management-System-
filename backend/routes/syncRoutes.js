@@ -2,10 +2,12 @@ const express = require("express");
 const axios = require("axios");
 const http = require("http");
 const https = require("https");
+const pLimit = require("p-limit");
 const pool = require("../db");
 const { getToken, autoGenerateToken } = require("../utils/token");
 const { ALLOWED_PROXIES } = require("../utils/helpers");
-const { revisionCache, revisionListCache } = require("../utils/cache");
+const { revisionCache, revisionListCache, inventoryCache } = require("../utils/cache");
+const { parseProxyBundle } = require("../utils/proxyParser");
 
 const router = express.Router();
 
@@ -52,6 +54,119 @@ async function fillRevisionDetails(baseUrl, headers) {
   }
 }
 
+// Background: fetch ZIP bundles for deployed revisions, parse XML, save inventory to DB
+async function fillDeployedInventory(baseUrl, headers, deployRows) {
+  try {
+    // Get unique proxy+revision pairs that are deployed
+    const seen = new Set();
+    const pairs = [];
+    for (const d of deployRows) {
+      const key = `${d.proxy_name}::${d.revision_number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      pairs.push({ proxyName: d.proxy_name, revNumber: d.revision_number });
+    }
+
+    if (pairs.length === 0) {
+      console.log("Background inventory: no deployed revisions to process");
+      return;
+    }
+
+    // Check which ones already have inventory in DB (batch check)
+    const toFetch = [];
+    for (const pair of pairs) {
+      try {
+        const existing = await pool.query(
+          "SELECT id FROM sp_get_proxy_inventory($1, $2)",
+          [pair.proxyName, pair.revNumber]
+        );
+        if (existing.rows.length === 0) {
+          toFetch.push(pair);
+        }
+      } catch (checkErr) {
+        console.error(`Background inventory: DB check failed for ${pair.proxyName} rev${pair.revNumber}:`, checkErr.message);
+        toFetch.push(pair);
+      }
+    }
+
+    if (toFetch.length === 0) {
+      console.log("Background inventory: all deployed revisions already in DB");
+      return;
+    }
+
+    console.log(`Background inventory: fetching ${toFetch.length} deployed revision(s)...`);
+
+    // Limit concurrency to 3 at a time to avoid timeouts and API rate limits
+    const limit = pLimit(3);
+    const results = await Promise.allSettled(
+      toFetch.map((pair) => limit(async () => {
+        const zipUrl = `${baseUrl}/${encodeURIComponent(pair.proxyName)}/revisions/${pair.revNumber}?format=bundle`;
+        console.log(`Background inventory: downloading ZIP for ${pair.proxyName} rev${pair.revNumber}...`);
+
+        const zipRes = await api.get(zipUrl, {
+          headers: { ...headers, Accept: "application/zip" },
+          responseType: "arraybuffer",
+          timeout: 60000,
+        });
+
+        const zipBuffer = Buffer.from(zipRes.data);
+        if (zipBuffer.length === 0) {
+          throw new Error(`Empty ZIP response for ${pair.proxyName} rev${pair.revNumber}`);
+        }
+
+        const parsed = parseProxyBundle(zipBuffer);
+        console.log(`Background inventory: parsed ${pair.proxyName} rev${pair.revNumber} — ${parsed.flows.length} flows, ${parsed.policies.length} policies`);
+
+        // Verify proxy exists in DB before inserting inventory
+        const proxyCheck = await pool.query("SELECT id FROM proxies WHERE proxy_name = $1", [pair.proxyName]);
+        if (proxyCheck.rows.length === 0) {
+          throw new Error(`Proxy "${pair.proxyName}" not found in proxies table — cannot save inventory`);
+        }
+
+        await pool.query(
+          "SELECT sp_upsert_proxy_inventory($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+          [
+            pair.proxyName,
+            pair.revNumber,
+            JSON.stringify(parsed.basePaths),
+            JSON.stringify(parsed.virtualHosts),
+            JSON.stringify(parsed.flows),
+            JSON.stringify(parsed.policies),
+            JSON.stringify(parsed.usedPolicies),
+            JSON.stringify(parsed.targetEndpoints),
+            JSON.stringify(parsed.proxyEndpoints),
+          ]
+        );
+
+        // Verify the save actually worked
+        const verify = await pool.query(
+          "SELECT id FROM sp_get_proxy_inventory($1, $2)",
+          [pair.proxyName, pair.revNumber]
+        );
+        if (verify.rows.length === 0) {
+          throw new Error(`Inventory save FAILED for ${pair.proxyName} rev${pair.revNumber} — not found in DB after insert`);
+        }
+
+        console.log(`Background inventory: SAVED ${pair.proxyName} rev${pair.revNumber}`);
+        return pair;
+      }))
+    );
+
+    const saved = results.filter((r) => r.status === "fulfilled").length;
+    const failed = results.filter((r) => r.status === "rejected");
+    inventoryCache.clear();
+    console.log(`Background inventory: completed ${saved}/${toFetch.length} deployed revision inventories`);
+    if (failed.length > 0) {
+      console.error(`Background inventory: ${failed.length} FAILED:`);
+      for (const f of failed) {
+        console.error("  ->", f.reason?.message || f.reason);
+      }
+    }
+  } catch (err) {
+    console.error("Background inventory fill CRASHED:", err.message, err.stack);
+  }
+}
+
 // POST /api/sync
 router.post("/", async (req, res) => {
   try {
@@ -63,7 +178,7 @@ router.post("/", async (req, res) => {
 
     console.time("SYNC_TOTAL");
 
-    // PHASE 1: Truncate + fetch rev lists + deployments for all 5 proxies IN PARALLEL
+    // PHASE 1: Truncate revisions+deployments + fetch rev lists + deployments for all 5 proxies IN PARALLEL
     const [, ...proxyResults] = await Promise.all([
       pool.query("SELECT sp_truncate_all()"),
       ...ALLOWED_PROXIES.map(async (name) => {
@@ -126,6 +241,7 @@ router.post("/", async (req, res) => {
     console.timeEnd("SYNC_TOTAL");
     revisionCache.clear();
     revisionListCache.clear();
+    inventoryCache.clear();
 
     // Respond IMMEDIATELY
     const counts = await pool.query("SELECT * FROM sp_get_counts()");
@@ -138,8 +254,9 @@ router.post("/", async (req, res) => {
       deployments: parseInt(counts.rows[0].deployment_count),
     });
 
-    // PHASE 2: Background — fill revision details (fire-and-forget)
+    // PHASE 2: Background — fill revision details + inventory for deployed revisions (fire-and-forget)
     fillRevisionDetails(baseUrl, headers);
+    fillDeployedInventory(baseUrl, headers, deployRows);
 
   } catch (error) {
     console.error("Sync failed:", error.response?.data || error.message);

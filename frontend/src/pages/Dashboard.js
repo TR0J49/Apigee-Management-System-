@@ -394,6 +394,26 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
     }
   }, [syncVersion, activeTab, syncRefresh, loadInventoryPage, inventoryPage, inventorySearch]);
 
+  // Auto-refresh dashboard stats every 10s after sync until inventory data appears
+  const autoRefreshRef = useRef(null);
+  useEffect(() => {
+    if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
+    if (syncVersion > 0) {
+      autoRefreshRef.current = setInterval(() => {
+        loadDashboardData();
+      }, 10000);
+    }
+    return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
+  }, [syncVersion, loadDashboardData]);
+
+  // Stop polling once inventory records are loaded
+  useEffect(() => {
+    if (dashboardStats && dashboardStats.inventory_count > 0 && autoRefreshRef.current) {
+      clearInterval(autoRefreshRef.current);
+      autoRefreshRef.current = null;
+    }
+  }, [dashboardStats]);
+
   const showPopup = (type, title, message) => {
     setPopup({ type, title, message });
     setTimeout(() => setPopup(null), 5000);

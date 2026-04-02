@@ -93,6 +93,22 @@ router.get("/:proxyName/revisions/:revNumber/inventory", async (req, res) => {
       ]
     );
 
+    // --- Step 5b: Save policy details to proxy_policies table ---
+    if (parsed.policyDetails && parsed.policyDetails.length > 0) {
+      await pool.query(
+        "SELECT sp_upsert_proxy_policies($1, $2, $3, $4, $5, $6, $7)",
+        [
+          proxyName,
+          revNumber,
+          parsed.policyDetails.map((p) => p.policy_name),
+          parsed.policyDetails.map((p) => p.policy_type),
+          parsed.policyDetails.map((p) => p.async),
+          parsed.policyDetails.map((p) => p.continue_on_error),
+          parsed.policyDetails.map((p) => p.enabled),
+        ]
+      );
+    }
+
     // --- Step 6: Read back from DB to confirm save ---
     const savedResult = await pool.query(
       "SELECT * FROM sp_get_proxy_inventory($1, $2)",

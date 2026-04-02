@@ -134,9 +134,58 @@ app.get("/api/dashboard/stats", async (req, res) => {
       deployed_revisions: parseInt(row.deployed_revision_count),
       api_count: parseInt(row.api_count),
       inventory_count: parseInt(row.inventory_count),
+      policy_count: parseInt(row.policy_count),
+      sharedflow_count: parseInt(row.sharedflow_count),
+      sf_revision_count: parseInt(row.sf_revision_count),
+      sf_deployed_revision_count: parseInt(row.sf_deployed_revision_count),
+      sf_policy_count: parseInt(row.sf_policy_count),
     });
   } catch (error) {
     console.error("GET /api/dashboard/stats failed:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET /api/sharedflows — returns all shared flows from DB
+app.get("/api/sharedflows", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sp_get_sharedflows()");
+    res.json({ success: true, sharedflows: result.rows });
+  } catch (error) {
+    console.error("GET /api/sharedflows failed:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET /api/sharedflows/:name/revisions — returns all revisions for a shared flow
+app.get("/api/sharedflows/:name/revisions", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sp_get_sharedflow_revisions($1)", [req.params.name]);
+    res.json({ success: true, revisions: result.rows });
+  } catch (error) {
+    console.error("GET /api/sharedflows/:name/revisions failed:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET /api/sharedflows/:name/deployments — returns deployments for a shared flow
+app.get("/api/sharedflows/:name/deployments", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sp_get_sharedflow_deployments($1)", [req.params.name]);
+    res.json({ success: true, deployments: result.rows });
+  } catch (error) {
+    console.error("GET /api/sharedflows/:name/deployments failed:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+// GET /api/sharedflows/:name/revisions/:rev/policies — returns policies for a sharedflow revision
+app.get("/api/sharedflows/:name/revisions/:rev/policies", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sp_get_sharedflow_policies($1, $2)", [req.params.name, req.params.rev]);
+    res.json({ success: true, policies: result.rows });
+  } catch (error) {
+    console.error("GET /api/sharedflows/:name/revisions/:rev/policies failed:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });

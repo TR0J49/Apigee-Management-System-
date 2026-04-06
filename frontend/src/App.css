@@ -1488,7 +1488,7 @@ tr.row-selected td {
 /* ===== DASHBOARD TAB ===== */
 .dash-stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 20px;
   margin-top: 28px;
 }
@@ -1562,6 +1562,13 @@ tr.row-selected td {
 
 .dash-stat-icon-deployed svg { stroke: #166534; }
 
+.dash-stat-icon-policies {
+  background: #fce4ec;
+  color: #880e4f;
+}
+
+.dash-stat-icon-policies svg { stroke: #880e4f; }
+
 .dash-stat-info {
   display: flex;
   flex-direction: column;
@@ -1608,6 +1615,18 @@ tr.row-selected td {
   margin-bottom: 14px;
 }
 
+.dash-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 2px solid #eee;
+}
+
 .dash-proxy-chips {
   display: flex;
   flex-wrap: wrap;
@@ -1637,6 +1656,12 @@ tr.row-selected td {
 
 .dash-proxy-chip:hover svg {
   stroke: #c0392b;
+}
+
+@media (max-width: 1200px) {
+  .dash-stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 @media (max-width: 1024px) {

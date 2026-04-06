@@ -90,7 +90,7 @@ function InventoryTab({
     <>
       <div className="dashboard-header">
         <h1>Proxy Inventory</h1>
-        <p className="dashboard-subtitle">All parsed proxy bundle data from database</p>
+        <p className="dashboard-subtitle"></p>
       </div>
 
       <div className="table-section">
@@ -235,9 +235,6 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
   const [inventory, setInventory] = useState(null);
   const [inventorySource, setInventorySource] = useState(null);
 
-  // Auto-download state
-  const autoDownloadTriggered = useRef(false);
-
   const [downloading, setDownloading] = useState({});
 
   // Sidebar tab state
@@ -256,17 +253,31 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
   const [dashboardStats, setDashboardStats] = useState(null);
   const [allProxyNames, setAllProxyNames] = useState([]);
 
+  // SharedFlows state (used on dashboard stats + sharedflows tab)
+  const [sharedflows, setSharedflows] = useState([]);
+  const [sfRevisionPage, setSfRevisionPage] = useState(null); // { sfName, revisions, deployments }
+  const [sfPolicyPage, setSfPolicyPage] = useState(null); // { sfName, revNumber, policies }
+  const [sfLoading, setSfLoading] = useState({ revisions: false, policies: false });
+
+  // Abort controllers to prevent duplicate API calls
+  const proxyAbortRef = useRef(null);
+  const inventoryAbortRef = useRef(null);
+
   // Load paginated proxy list from server
   const loadProxyPage = useCallback(async (page = 1, searchVal = "") => {
+    if (proxyAbortRef.current) proxyAbortRef.current.abort();
+    const controller = new AbortController();
+    proxyAbortRef.current = controller;
     setProxyLoading(true);
     try {
       const params = { page, limit: PROXY_ROWS_PER_PAGE };
       if (searchVal) params.search = searchVal;
-      const res = await axios.get(`${API_BASE}/api/proxy-list/paginated`, { params });
+      const res = await axios.get(`${API_BASE}/api/proxy-list/paginated`, { params, signal: controller.signal });
       setProxies(res.data.proxies || []);
       setProxyTotal(res.data.total || 0);
       setProxyTotalPages(res.data.totalPages || 0);
     } catch (err) {
+      if (axios.isCancel(err)) return;
       console.error("Proxy list load failed:", err.message);
     } finally {
       setProxyLoading(false);
@@ -275,29 +286,35 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
 
   const loadDashboardData = useCallback(async () => {
     try {
-      const [statsRes, listRes] = await Promise.all([
+      const [statsRes, listRes, sfRes] = await Promise.all([
         axios.get(`${API_BASE}/api/dashboard/stats`),
         axios.get(`${API_BASE}/api/proxy-list`),
+        axios.get(`${API_BASE}/api/sharedflows`),
       ]);
       if (statsRes.data.success) {
         setDashboardStats(statsRes.data);
         setStats({ total: statsRes.data.revisions });
       }
       setAllProxyNames(listRes.data.proxies || []);
+      setSharedflows(sfRes.data.sharedflows || []);
     } catch (err) {}
   }, []);
 
   // Load inventory page from server (server-side pagination)
   const loadInventoryPage = useCallback(async (page = 1, search = "") => {
+    if (inventoryAbortRef.current) inventoryAbortRef.current.abort();
+    const controller = new AbortController();
+    inventoryAbortRef.current = controller;
     setInventoryLoading(true);
     try {
       const params = { page, limit: INV_ROWS_PER_PAGE };
       if (search) params.search = search;
-      const res = await axios.get(`${API_BASE}/api/inventory/paginated`, { params });
+      const res = await axios.get(`${API_BASE}/api/inventory/paginated`, { params, signal: controller.signal });
       setInventoryRows(res.data.rows || []);
       setInventoryTotal(res.data.total || 0);
       setInventoryTotalPages(res.data.totalPages || 0);
     } catch (err) {
+      if (axios.isCancel(err)) return;
       console.error("Inventory load failed:", err.message);
     } finally {
       setInventoryLoading(false);
@@ -390,29 +407,42 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
   useEffect(() => {
     if (syncVersion > 0) {
       syncRefresh();
-      if (activeTab === "inventory") loadInventoryPage(inventoryPage, inventorySearch);
+      loadInventoryPage(1, inventorySearch);
     }
-  }, [syncVersion, activeTab, syncRefresh, loadInventoryPage, inventoryPage, inventorySearch]);
+  }, [syncVersion]); // eslint-disable-line
 
-  // Auto-refresh dashboard stats every 10s after sync until inventory data appears
+  // ==================== AUTO-REFRESH (all tabs, every 10s after sync) ====================
   const autoRefreshRef = useRef(null);
   useEffect(() => {
     if (autoRefreshRef.current) clearInterval(autoRefreshRef.current);
     if (syncVersion > 0) {
       autoRefreshRef.current = setInterval(() => {
+        // Always refresh dashboard stats
         loadDashboardData();
+        // Refresh active tab data
+        if (activeTab === "proxies") {
+          loadProxyPage(currentPage, search);
+        } else if (activeTab === "inventory") {
+          loadInventoryPage(inventoryPage, inventorySearch);
+        }
       }, 10000);
     }
     return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
-  }, [syncVersion, loadDashboardData]);
+  }, [syncVersion, activeTab, currentPage, search, inventoryPage, inventorySearch, loadDashboardData, loadProxyPage, loadInventoryPage]);
 
-  // Stop polling once inventory records are loaded
+  // Stop polling once all background data is populated and sync is done
   useEffect(() => {
-    if (dashboardStats && dashboardStats.inventory_count > 0 && autoRefreshRef.current) {
+    if (
+      !isSyncing &&
+      dashboardStats &&
+      dashboardStats.inventory_count > 0 &&
+      dashboardStats.sharedflow_count > 0 &&
+      autoRefreshRef.current
+    ) {
       clearInterval(autoRefreshRef.current);
       autoRefreshRef.current = null;
     }
-  }, [dashboardStats]);
+  }, [isSyncing, dashboardStats]);
 
   const showPopup = (type, title, message) => {
     setPopup({ type, title, message });
@@ -445,49 +475,6 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
       setDownloading((prev) => { const n = { ...prev }; delete n[key]; return n; });
     }
   }, []);
-
-  // ==================== AUTO-DOWNLOAD ALL DEPLOYED ZIPS ====================
-  // Triggers automatically after sync completes — downloads all deployed revision ZIPs
-  useEffect(() => {
-    if (syncVersion === 0 || isSyncing) return;
-    if (autoDownloadTriggered.current) return;
-    autoDownloadTriggered.current = true;
-
-    (async () => {
-      try {
-        // Step 1: Get all deployed revisions from DB
-        const depRes = await axios.get(`${API_BASE}/api/deployments/all`);
-        const deployments = depRes.data.deployments || [];
-
-        if (deployments.length === 0) return;
-
-        console.log(`Auto-download: starting ${deployments.length} deployed revision ZIP(s)...`);
-
-        let downloaded = 0;
-        let failed = 0;
-
-        // Step 2: Download each ZIP sequentially (browser blocks parallel downloads)
-        for (let i = 0; i < deployments.length; i++) {
-          const dep = deployments[i];
-          const success = await downloadBundle(dep.proxy_name, dep.revision_number, dep.environments);
-          if (success) {
-            downloaded++;
-          } else {
-            failed++;
-          }
-
-          // Small delay between downloads so browser doesn't block them
-          if (i < deployments.length - 1) {
-            await new Promise((r) => setTimeout(r, 800));
-          }
-        }
-
-        console.log(`Auto-download complete: ${downloaded}/${deployments.length}${failed > 0 ? `, Failed: ${failed}` : ""}`);
-      } catch (err) {
-        console.error("Auto-download failed:", err.message);
-      }
-    })();
-  }, [syncVersion, isSyncing, downloadBundle]);
 
   // ==================== PAGE NAVIGATION ====================
   const openRevisionPage = async (proxyName) => {
@@ -553,6 +540,53 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
     setDetailPage(null);
     setInventory(null);
     setInventorySource(null);
+  };
+
+  // ==================== SHARED FLOW PAGE NAVIGATION ====================
+  const openSfRevisionPage = async (sfName) => {
+    setSfRevisionPage({ sfName, revisions: [], deployments: {} });
+    setSfPolicyPage(null);
+    setSfLoading((p) => ({ ...p, revisions: true }));
+    try {
+      const [revRes, depRes] = await Promise.all([
+        axios.get(`${API_BASE}/api/sharedflows/${encodeURIComponent(sfName)}/revisions`),
+        axios.get(`${API_BASE}/api/sharedflows/${encodeURIComponent(sfName)}/deployments`),
+      ]);
+      const depMap = {};
+      if (depRes.data.deployments) {
+        for (const d of depRes.data.deployments) {
+          if (!depMap[d.revision_number]) depMap[d.revision_number] = [];
+          depMap[d.revision_number].push(d.environment);
+        }
+      }
+      setSfRevisionPage({ sfName, revisions: revRes.data.revisions || [], deployments: depMap });
+    } catch (err) {
+      showPopup("error", "Error", err.response?.data?.message || "Failed to fetch sharedflow revisions");
+    } finally {
+      setSfLoading((p) => ({ ...p, revisions: false }));
+    }
+  };
+
+  const openSfPolicyPage = async (sfName, revNumber) => {
+    setSfLoading((p) => ({ ...p, policies: true }));
+    setSfPolicyPage(null);
+    try {
+      const res = await axios.get(`${API_BASE}/api/sharedflows/${encodeURIComponent(sfName)}/revisions/${revNumber}/policies`);
+      setSfPolicyPage({ sfName, revNumber, policies: res.data.policies || [] });
+    } catch (err) {
+      showPopup("error", "Error", err.response?.data?.message || "Failed to fetch sharedflow policies");
+    } finally {
+      setSfLoading((p) => ({ ...p, policies: false }));
+    }
+  };
+
+  const closeSfRevisionPage = () => {
+    setSfRevisionPage(null);
+    setSfPolicyPage(null);
+  };
+
+  const closeSfPolicyPage = () => {
+    setSfPolicyPage(null);
   };
 
   // Debounced search for proxies
@@ -871,6 +905,12 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
             </span>
             Inventory
           </button>
+          <button className={`sidebar-btn ${activeTab === "sharedflows" ? "sidebar-active" : ""}`} onClick={() => { setActiveTab("sharedflows"); setSfRevisionPage(null); setSfPolicyPage(null); }}>
+            <span className="sidebar-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 012 2v7"/><path d="M11 18H8a2 2 0 01-2-2V9"/></svg>
+            </span>
+            Shared Flows
+          </button>
         </div>
         <div className="sidebar-section">
           <div className="sidebar-label">STATUS</div>
@@ -893,9 +933,21 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
           <>
             <div className="dashboard-header">
               <h1>Dashboard</h1>
-              <p className="dashboard-subtitle">Overview of your Apigee API proxy data</p>
+              <p className="dashboard-subtitle"></p>
             </div>
 
+            {isSyncing && (
+              <div className="dash-sync-banner">
+                <span className="spinner-small"></span>
+                Sync in progress...
+              </div>
+            )}
+
+            {/* ===== PROXY SECTION ===== */}
+            <h2 className="dash-section-title">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
+              API Proxies
+            </h2>
             <div className="dash-stats-grid">
               <div className="dash-stat-card">
                 <div className="dash-stat-icon dash-stat-icon-proxies">
@@ -913,15 +965,6 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
                 <div className="dash-stat-info">
                   <span className="dash-stat-number">{dashboardStats?.revisions ?? "-"}</span>
                   <span className="dash-stat-label">Total Revisions</span>
-                </div>
-              </div>
-              <div className="dash-stat-card">
-                <div className="dash-stat-icon dash-stat-icon-api">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
-                </div>
-                <div className="dash-stat-info">
-                  <span className="dash-stat-number">{dashboardStats?.api_count ?? "-"}</span>
-                  <span className="dash-stat-label">API Count</span>
                 </div>
               </div>
               <div className="dash-stat-card">
@@ -943,6 +986,15 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
                 </div>
               </div>
               <div className="dash-stat-card">
+                <div className="dash-stat-icon dash-stat-icon-api">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 20V10"/><path d="M12 20V4"/><path d="M6 20v-6"/></svg>
+                </div>
+                <div className="dash-stat-info">
+                  <span className="dash-stat-number">{dashboardStats?.api_count ?? "-"}</span>
+                  <span className="dash-stat-label">API Count</span>
+                </div>
+              </div>
+              <div className="dash-stat-card">
                 <div className="dash-stat-icon dash-stat-icon-inventory">
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 14l2 2 4-4"/></svg>
                 </div>
@@ -951,18 +1003,19 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
                   <span className="dash-stat-label">Inventory Records</span>
                 </div>
               </div>
-            </div>
-
-            {isSyncing && (
-              <div className="dash-sync-banner">
-                <span className="spinner-small"></span>
-                Sync in progress...
+              <div className="dash-stat-card">
+                <div className="dash-stat-icon dash-stat-icon-policies">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+                <div className="dash-stat-info">
+                  <span className="dash-stat-number">{dashboardStats?.policy_count ?? "-"}</span>
+                  <span className="dash-stat-label">Policies</span>
+                </div>
               </div>
-            )}
+            </div>
 
             {allProxyNames.length > 0 && (
               <div className="dash-quick-section">
-                <h2 className="dash-quick-title">Proxies</h2>
                 <div className="dash-proxy-chips">
                   {allProxyNames.map((p) => (
                     <button className="dash-proxy-chip" key={p.proxy_name} onClick={() => { setActiveTab("proxies"); setTimeout(() => openRevisionPage(p.proxy_name), 0); }}>
@@ -974,7 +1027,63 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
               </div>
             )}
 
-            {allProxyNames.length === 0 && !isSyncing && (
+            {/* ===== SHARED FLOWS SECTION ===== */}
+            <h2 className="dash-section-title" style={{ marginTop: 32 }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5b21b6" strokeWidth="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 012 2v7"/><path d="M11 18H8a2 2 0 01-2-2V9"/></svg>
+              Shared Flows
+            </h2>
+            <div className="dash-stats-grid">
+              <div className="dash-stat-card">
+                <div className="dash-stat-icon" style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5b21b6" strokeWidth="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 012 2v7"/><path d="M11 18H8a2 2 0 01-2-2V9"/></svg>
+                </div>
+                <div className="dash-stat-info">
+                  <span className="dash-stat-number">{dashboardStats?.sharedflow_count ?? "-"}</span>
+                  <span className="dash-stat-label">Total Shared Flows</span>
+                </div>
+              </div>
+              <div className="dash-stat-card">
+                <div className="dash-stat-icon" style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5b21b6" strokeWidth="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                </div>
+                <div className="dash-stat-info">
+                  <span className="dash-stat-number">{dashboardStats?.sf_revision_count ?? "-"}</span>
+                  <span className="dash-stat-label">Total Revisions</span>
+                </div>
+              </div>
+              <div className="dash-stat-card">
+                <div className="dash-stat-icon" style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5b21b6" strokeWidth="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                </div>
+                <div className="dash-stat-info">
+                  <span className="dash-stat-number">{dashboardStats?.sf_deployed_revision_count ?? "-"}</span>
+                  <span className="dash-stat-label">Deployed Revisions</span>
+                </div>
+              </div>
+              <div className="dash-stat-card">
+                <div className="dash-stat-icon" style={{ background: "#ede9fe", color: "#5b21b6" }}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5b21b6" strokeWidth="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                </div>
+                <div className="dash-stat-info">
+                  <span className="dash-stat-number">{dashboardStats?.sf_policy_count ?? "-"}</span>
+                  <span className="dash-stat-label">Policies</span>
+                </div>
+              </div>
+            </div>
+
+            {sharedflows.length > 0 && (
+              <div className="dash-quick-section">
+                <div className="dash-proxy-chips">
+                  {sharedflows.map((sf) => (
+                    <span className="dash-proxy-chip" key={sf.sharedflow_name} style={{ cursor: "default" }}>
+                      {sf.sharedflow_name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {allProxyNames.length === 0 && sharedflows.length === 0 && !isSyncing && (
               <div className="empty-state">
                 <div className="empty-icon">
                   <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
@@ -1111,6 +1220,166 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
             exporting={exporting}
             isSyncing={isSyncing}
           />
+        )}
+
+        {activeTab === "sharedflows" && (
+          <>
+            {/* Sharedflow Policy Detail Page */}
+            {sfPolicyPage ? (
+              <>
+                <div className="dashboard-header">
+                  <h1>Policies</h1>
+                  <p className="dashboard-subtitle">{sfPolicyPage.sfName} - Revision {sfPolicyPage.revNumber}</p>
+                </div>
+                <button className="btn-back" style={{ marginBottom: 20 }} onClick={closeSfPolicyPage}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+                  Back to Revisions
+                </button>
+                {sfPolicyPage.policies.length > 0 ? (
+                  <div className="table-wrapper">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Policy Name</th>
+                          <th>Type</th>
+                          <th>Async</th>
+                          <th>Continue On Error</th>
+                          <th>Enabled</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sfPolicyPage.policies.map((p, i) => (
+                          <tr key={p.policy_name}>
+                            <td style={{ color: "#aaa", fontSize: 12 }}>{i + 1}</td>
+                            <td className="proxy-name-cell">{p.policy_name}</td>
+                            <td><span className="inventory-tag-policy">{p.policy_type || "-"}</span></td>
+                            <td>{p.async === "true" ? <span className="env-tag">true</span> : <span style={{ color: "#aaa" }}>false</span>}</td>
+                            <td>{p.continue_on_error === "true" ? <span className="env-tag">true</span> : <span style={{ color: "#aaa" }}>false</span>}</td>
+                            <td>{p.enabled === "true" ? <span className="env-tag">true</span> : <span style={{ color: "#c0392b" }}>false</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <h3>No Policies Found</h3>
+                    <p>No policies were found for this sharedflow revision.</p>
+                  </div>
+                )}
+              </>
+
+            /* Sharedflow Revision List Page */
+            ) : sfRevisionPage ? (
+              <>
+                <div className="dashboard-header">
+                  <h1>Revisions</h1>
+                  <p className="dashboard-subtitle">{sfRevisionPage.sfName}</p>
+                </div>
+                <button className="btn-back" style={{ marginBottom: 20 }} onClick={closeSfRevisionPage}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+                  Back to Shared Flows
+                </button>
+                {sfLoading.revisions ? (
+                  <div className="overlay-loading">
+                    <div className="spinner"></div>
+                    <p>Loading revisions...</p>
+                  </div>
+                ) : sfRevisionPage.revisions.length > 0 ? (
+                  <div className="revision-list">
+                    {sfRevisionPage.revisions.map((r) => {
+                      const envs = sfRevisionPage.deployments[r.revision_number] || [];
+                      return (
+                        <div className="revision-row" key={r.revision_number}>
+                          <div className="revision-row-left">
+                            <span className="revision-badge">Rev {r.revision_number}</span>
+                            <span className="revision-row-label">Revision {r.revision_number}</span>
+                            {envs.length > 0 && (
+                              <div className="env-tags">
+                                {envs.map((env) => (
+                                  <span className="env-tag" key={env}>{env}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="revision-row-actions">
+                            {envs.length > 0 && (
+                              <button
+                                className="btn-see-more"
+                                onClick={() => openSfPolicyPage(sfRevisionPage.sfName, r.revision_number)}
+                                disabled={sfLoading.policies}
+                              >
+                                {sfLoading.policies ? "Loading..." : "View Policies"}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <h3>No Revisions Found</h3>
+                    <p>No revisions found for this sharedflow.</p>
+                  </div>
+                )}
+              </>
+
+            /* Sharedflow List (main view) */
+            ) : (
+              <>
+                <div className="dashboard-header">
+                  <h1>Shared Flows</h1>
+                  <p className="dashboard-subtitle">All synced shared flows from Apigee</p>
+                </div>
+                {sharedflows.length > 0 ? (
+                  <div className="table-section">
+                    <div className="table-header">
+                      <h2>Shared Flows <span className="badge">{sharedflows.length}</span></h2>
+                    </div>
+                    <div className="table-wrapper">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Shared Flow Name</th>
+                            <th>Synced At</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {sharedflows.map((sf, i) => (
+                            <tr key={sf.sharedflow_name}>
+                              <td style={{ color: "#aaa", fontSize: 12 }}>{i + 1}</td>
+                              <td className="proxy-name-cell">{sf.sharedflow_name}</td>
+                              <td>{sf.timestamp ? new Date(sf.timestamp).toLocaleString() : "-"}</td>
+                              <td>
+                                <button
+                                  className="btn-check-revision"
+                                  onClick={() => openSfRevisionPage(sf.sharedflow_name)}
+                                >
+                                  Check Revisions
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty-state">
+                    <div className="empty-icon">
+                      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#ccc" strokeWidth="1.5"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 012 2v7"/><path d="M11 18H8a2 2 0 01-2-2V9"/></svg>
+                    </div>
+                    <h3>No Shared Flows</h3>
+                    <p>{isSyncing ? "Sync in progress..." : "Run a sync to fetch shared flows from Apigee."}</p>
+                  </div>
+                )}
+              </>
+            )}
+          </>
         )}
       </main>
     </div>

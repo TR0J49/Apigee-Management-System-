@@ -88,7 +88,7 @@ function Navbar({ isLoggedIn, onLogin, onLogout, onSyncComplete, onSyncStart, on
           <button className="popup-close" onClick={() => setPopup(null)}>x</button>
         </div>
       )}
-
+         
       <nav className="navbar">
         <div className="navbar-container">
           <Link to="/" className="navbar-logo">

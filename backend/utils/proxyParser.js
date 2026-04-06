@@ -172,13 +172,48 @@ function parseProxyBundle(zipBuffer) {
     }
   }
 
-  // --- 2. Scan apiproxy/policies/*.xml for all policy names ---
+  // --- 2. Scan apiproxy/policies/*.xml for all policy names + attributes ---
   const policyEntries = entries.filter(
     (e) => e.entryName.replace(/\\/g, "/").match(/apiproxy\/policies\/[^/]+\.xml$/)
   );
+  result.policyDetails = [];
   for (const entry of policyEntries) {
     const policyName = entry.entryName.split("/").pop().replace(".xml", "");
     result.policies.push(policyName);
+
+    // Parse policy XML to extract async, continueOnError, enabled attributes
+    try {
+      const xml = entry.getData().toString("utf8");
+      const parsed = xmlParser.parse(xml);
+      // The root element is the policy type (e.g. AssignMessage, OAuthV2, etc.)
+      const rootKey = Object.keys(parsed).find((k) => k !== "?xml");
+      if (rootKey && parsed[rootKey]) {
+        const attrs = parsed[rootKey];
+        result.policyDetails.push({
+          policy_name: attrs["@_name"] || policyName,
+          policy_type: rootKey,
+          async: attrs["@_async"] || "false",
+          continue_on_error: attrs["@_continueOnError"] || "false",
+          enabled: attrs["@_enabled"] || "true",
+        });
+      } else {
+        result.policyDetails.push({
+          policy_name: policyName,
+          policy_type: "",
+          async: "false",
+          continue_on_error: "false",
+          enabled: "true",
+        });
+      }
+    } catch (parseErr) {
+      result.policyDetails.push({
+        policy_name: policyName,
+        policy_type: "",
+        async: "false",
+        continue_on_error: "false",
+        enabled: "true",
+      });
+    }
   }
 
   // --- 3. Scan apiproxy/targets/*.xml for target endpoint names ---
@@ -212,4 +247,65 @@ function parseProxyBundle(zipBuffer) {
   return result;
 }
 
-module.exports = { parseProxyBundle };
+// --- Parse a sharedflow ZIP bundle and return policy details ---
+// Sharedflow ZIPs have policies under sharedflowbundle/policies/*.xml
+function parseSharedflowPolicies(zipBuffer) {
+  if (!zipBuffer || zipBuffer.length === 0) {
+    throw new Error("parseSharedflowPolicies: empty or null ZIP buffer");
+  }
+
+  const zip = new AdmZip(zipBuffer);
+  const entries = zip.getEntries();
+  const policyDetails = [];
+
+  const policyEntries = entries.filter(
+    (e) => e.entryName.replace(/\\/g, "/").match(/sharedflowbundle\/policies\/[^/]+\.xml$/)
+  );
+
+  // Fallback: also check apiproxy/policies/ in case the bundle uses that structure
+  if (policyEntries.length === 0) {
+    const fallback = entries.filter(
+      (e) => e.entryName.replace(/\\/g, "/").match(/policies\/[^/]+\.xml$/)
+    );
+    policyEntries.push(...fallback);
+  }
+
+  for (const entry of policyEntries) {
+    const policyName = entry.entryName.split("/").pop().replace(".xml", "");
+    try {
+      const xml = entry.getData().toString("utf8");
+      const parsed = xmlParser.parse(xml);
+      const rootKey = Object.keys(parsed).find((k) => k !== "?xml");
+      if (rootKey && parsed[rootKey]) {
+        const attrs = parsed[rootKey];
+        policyDetails.push({
+          policy_name: attrs["@_name"] || policyName,
+          policy_type: rootKey,
+          async: attrs["@_async"] || "false",
+          continue_on_error: attrs["@_continueOnError"] || "false",
+          enabled: attrs["@_enabled"] || "true",
+        });
+      } else {
+        policyDetails.push({
+          policy_name: policyName,
+          policy_type: "",
+          async: "false",
+          continue_on_error: "false",
+          enabled: "true",
+        });
+      }
+    } catch (parseErr) {
+      policyDetails.push({
+        policy_name: policyName,
+        policy_type: "",
+        async: "false",
+        continue_on_error: "false",
+        enabled: "true",
+      });
+    }
+  }
+
+  return policyDetails;
+}
+
+module.exports = { parseProxyBundle, parseSharedflowPolicies };

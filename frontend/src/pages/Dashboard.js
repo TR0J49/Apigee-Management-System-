@@ -2,6 +2,52 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 
 const API_BASE = "";
+
+// Map Apigee policy type to icon file in /public
+const POLICY_ICON_MAP = {
+  verifyapikey: "/VerifyAPIKey.png",
+  spikearrest: "/SpikeArrest.png",
+  raisefault: "/RaiseFault.png",
+  oauthv2: "/OAuthV2.png",
+  keyvaluemapoperations: "/KeyValueMapOperations.png",
+  javascript: "/JavaScript.png",
+  javacallout: "/JavaCallout.png",
+  generatejwt: "/GenerateJWT.png",
+  extractvariables: "/ExtractVariables.png",
+  assignmessage: "/AssignMessage.png",
+  accessentity: "/AccessEntity.png",
+  flowcallout: "/FlowCallout.png",
+  accesscontrol: "/AccessControl.png",
+};
+// Prefix/keyword aliases commonly used in Apigee policy filenames
+const POLICY_NAME_ALIASES = [
+  { match: ["assignmessage", "am", "assign"], icon: "/AssignMessage.png" },
+  { match: ["generatejwt", "jwt", "genjwt", "generatejwttoken"], icon: "/GenerateJWT.png" },
+  { match: ["verifyapikey", "vk", "verifykey", "apikey"], icon: "/VerifyAPIKey.png" },
+  { match: ["spikearrest", "sa", "spike"], icon: "/SpikeArrest.png" },
+  { match: ["raisefault", "rf", "fault"], icon: "/RaiseFault.png" },
+  { match: ["oauthv2", "oauth"], icon: "/OAuthV2.png" },
+  { match: ["keyvaluemapoperations", "kvm", "kvmops"], icon: "/KeyValueMapOperations.png" },
+  { match: ["javascript", "js"], icon: "/JavaScript.png" },
+  { match: ["javacallout", "jc", "java"], icon: "/JavaCallout.png" },
+  { match: ["extractvariables", "ev", "extract"], icon: "/ExtractVariables.png" },
+  { match: ["accessentity", "ae"], icon: "/AccessEntity.png" },
+  { match: ["flowcallout", "fc", "flow"], icon: "/FlowCallout.png" },
+  { match: ["accesscontrol", "ac"], icon: "/AccessControl.png" },
+];
+function getPolicyIcon(policyType, policyName) {
+  const norm = (s) => String(s || "").toLowerCase().replace(/[\s_-]/g, "");
+  const typeKey = norm(policyType);
+  if (POLICY_ICON_MAP[typeKey]) return POLICY_ICON_MAP[typeKey];
+  const nameKey = norm(policyName);
+  // Token-based match for prefixes like "AM-Foo" / "JWT-Generate"
+  const tokens = String(policyName || "").toLowerCase().split(/[\s_\-.]+/).filter(Boolean);
+  for (const a of POLICY_NAME_ALIASES) {
+    if (tokens.some((t) => a.match.includes(t))) return a.icon;
+    if (a.match.some((m) => nameKey.includes(m))) return a.icon;
+  }
+  return null;
+}
 const PROXY_ROWS_PER_PAGE = 50;
 const INV_ROWS_PER_PAGE = 50;
 
@@ -1252,7 +1298,34 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
                         {sfPolicyPage.policies.map((p, i) => (
                           <tr key={p.policy_name}>
                             <td style={{ color: "#aaa", fontSize: 12 }}>{i + 1}</td>
-                            <td className="proxy-name-cell">{p.policy_name}</td>
+                            <td className="proxy-name-cell">
+                              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <div
+                                  style={{
+                                    width: 28,
+                                    height: 28,
+                                    flexShrink: 0,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    background: "#fff",
+                                    borderRadius: 6,
+                                    border: "1px solid #e0e0e0",
+                                    padding: 3,
+                                    boxSizing: "border-box",
+                                  }}
+                                >
+                                  {getPolicyIcon(p.policy_type, p.policy_name) && (
+                                    <img
+                                      src={getPolicyIcon(p.policy_type, p.policy_name)}
+                                      alt={p.policy_type || ""}
+                                      style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain", display: "block" }}
+                                    />
+                                  )}
+                                </div>
+                                <span>{p.policy_name}</span>
+                              </div>
+                            </td>
                             <td><span className="inventory-tag-policy">{p.policy_type || "-"}</span></td>
                             <td>{p.async === "true" ? <span className="env-tag">true</span> : <span style={{ color: "#aaa" }}>false</span>}</td>
                             <td>{p.continue_on_error === "true" ? <span className="env-tag">true</span> : <span style={{ color: "#aaa" }}>false</span>}</td>

@@ -123,6 +123,9 @@ async function initDB() {
 
   // ========== MIGRATIONS (add columns to existing tables) ==========
   await pool.query(`ALTER TABLE proxy_policies ADD COLUMN IF NOT EXISTS policy_type TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE proxy_policies ADD COLUMN IF NOT EXISTS shared_flow_bundle TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE proxy_policies ADD COLUMN IF NOT EXISTS class_name TEXT DEFAULT ''`);
+  await pool.query(`ALTER TABLE proxy_policies ADD COLUMN IF NOT EXISTS resource_url TEXT DEFAULT ''`);
 
   // ========== INDEXES ==========
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_proxy_name ON proxies (proxy_name)`);
@@ -217,17 +220,18 @@ async function initDB() {
         RETURN QUERY
         SELECT p.id, p.proxy_name, p.timestamp FROM proxies p
         WHERE p.proxy_name ILIKE '%' || p_search || '%'
-        ORDER BY p.proxy_name ASC;
+        ORDER BY p.id ASC;
       ELSE
         RETURN QUERY
         SELECT p.id, p.proxy_name, p.timestamp FROM proxies p
-        ORDER BY p.proxy_name ASC;
+        ORDER BY p.id ASC;
       END IF;
     END;
     $$ LANGUAGE plpgsql
   `);
 
   // 6b. Get proxy list with server-side pagination
+  await pool.query(`DROP FUNCTION IF EXISTS sp_get_proxy_list_paginated(TEXT, INT, INT)`);
   await pool.query(`
     CREATE OR REPLACE FUNCTION sp_get_proxy_list_paginated(
       p_search TEXT DEFAULT NULL,
@@ -247,7 +251,7 @@ async function initDB() {
       )
       SELECT f.id, f.proxy_name, f.timestamp, c.cnt AS total_count
       FROM filtered f, counted c
-      ORDER BY f.proxy_name ASC
+      ORDER BY f.id ASC
       LIMIT p_limit OFFSET p_offset;
     END;
     $$ LANGUAGE plpgsql
@@ -675,13 +679,15 @@ async function initDB() {
 
   // Drop old signatures before recreating with new columns
   await pool.query(`DROP FUNCTION IF EXISTS sp_upsert_proxy_policies(TEXT, TEXT, TEXT[], TEXT[], TEXT[], TEXT[])`);
+  await pool.query(`DROP FUNCTION IF EXISTS sp_upsert_proxy_policies(TEXT, TEXT, TEXT[], TEXT[], TEXT[], TEXT[], TEXT[])`);
   await pool.query(`DROP FUNCTION IF EXISTS sp_get_proxy_policies(TEXT, TEXT)`);
 
   // 20. Bulk upsert proxy policies (called after ZIP parse)
   await pool.query(`
     CREATE OR REPLACE FUNCTION sp_upsert_proxy_policies(
       p_proxy_name TEXT, p_rev_number TEXT,
-      p_policy_names TEXT[], p_policy_types TEXT[], p_asyncs TEXT[], p_continue_on_errors TEXT[], p_enableds TEXT[]
+      p_policy_names TEXT[], p_policy_types TEXT[], p_asyncs TEXT[], p_continue_on_errors TEXT[], p_enableds TEXT[],
+      p_shared_flow_bundles TEXT[], p_class_names TEXT[], p_resource_urls TEXT[]
     ) RETURNS VOID AS $$
     DECLARE
       v_proxy_id INT;
@@ -691,13 +697,16 @@ async function initDB() {
         RAISE EXCEPTION 'Proxy "%" not found in proxies table', p_proxy_name;
       END IF;
 
-      INSERT INTO proxy_policies (proxy_id, revision_number, policy_name, policy_type, async, continue_on_error, enabled)
-      SELECT v_proxy_id, p_rev_number, unnest(p_policy_names), unnest(p_policy_types), unnest(p_asyncs), unnest(p_continue_on_errors), unnest(p_enableds)
+      INSERT INTO proxy_policies (proxy_id, revision_number, policy_name, policy_type, async, continue_on_error, enabled, shared_flow_bundle, class_name, resource_url)
+      SELECT v_proxy_id, p_rev_number, unnest(p_policy_names), unnest(p_policy_types), unnest(p_asyncs), unnest(p_continue_on_errors), unnest(p_enableds), unnest(p_shared_flow_bundles), unnest(p_class_names), unnest(p_resource_urls)
       ON CONFLICT (proxy_id, revision_number, policy_name) DO UPDATE SET
         policy_type = EXCLUDED.policy_type,
         async = EXCLUDED.async,
         continue_on_error = EXCLUDED.continue_on_error,
-        enabled = EXCLUDED.enabled;
+        enabled = EXCLUDED.enabled,
+        shared_flow_bundle = EXCLUDED.shared_flow_bundle,
+        class_name = EXCLUDED.class_name,
+        resource_url = EXCLUDED.resource_url;
     END;
     $$ LANGUAGE plpgsql
   `);
@@ -705,10 +714,10 @@ async function initDB() {
   // 21. Get policies for a specific proxy revision
   await pool.query(`
     CREATE OR REPLACE FUNCTION sp_get_proxy_policies(p_proxy_name TEXT, p_rev_number TEXT)
-    RETURNS TABLE(policy_name TEXT, policy_type TEXT, async TEXT, continue_on_error TEXT, enabled TEXT) AS $$
+    RETURNS TABLE(policy_name TEXT, policy_type TEXT, async TEXT, continue_on_error TEXT, enabled TEXT, shared_flow_bundle TEXT, class_name TEXT, resource_url TEXT) AS $$
     BEGIN
       RETURN QUERY
-      SELECT pp.policy_name, pp.policy_type, pp.async, pp.continue_on_error, pp.enabled
+      SELECT pp.policy_name, pp.policy_type, pp.async, pp.continue_on_error, pp.enabled, pp.shared_flow_bundle, pp.class_name, pp.resource_url
       FROM proxy_policies pp JOIN proxies p ON p.id = pp.proxy_id
       WHERE p.proxy_name = p_proxy_name AND pp.revision_number = p_rev_number
       ORDER BY pp.policy_name ASC;

@@ -15,6 +15,20 @@ const xmlParser = new XMLParser({
   isArray: (name) => ["Flow", "Step", "VirtualHost", "RouteRule"].includes(name),
 });
 
+// --- Extract text value from an XML element that may be a string,
+//     an object with "#text", or an array of such values ---
+function extractText(node) {
+  if (node === undefined || node === null) return "";
+  if (typeof node === "string" || typeof node === "number") return String(node).trim();
+  if (Array.isArray(node)) return node.map(extractText).filter(Boolean).join(",");
+  if (typeof node === "object") {
+    if (node["#text"] !== undefined) return String(node["#text"]).trim();
+    // Some elements like <ResourceURL>jsc://file.js</ResourceURL> may parse as "" when empty
+    return "";
+  }
+  return "";
+}
+
 // --- Extract path suffixes from Apigee flow conditions ---
 // e.g. '(proxy.pathsuffix MatchesPath "/users") and (request.verb = "GET")'
 //       → ["/users"]
@@ -195,6 +209,9 @@ function parseProxyBundle(zipBuffer) {
           async: attrs["@_async"] || "false",
           continue_on_error: attrs["@_continueOnError"] || "false",
           enabled: attrs["@_enabled"] || "true",
+          shared_flow_bundle: extractText(attrs.SharedFlowBundle),
+          class_name: extractText(attrs.ClassName),
+          resource_url: extractText(attrs.ResourceURL),
         });
       } else {
         result.policyDetails.push({
@@ -203,6 +220,9 @@ function parseProxyBundle(zipBuffer) {
           async: "false",
           continue_on_error: "false",
           enabled: "true",
+          shared_flow_bundle: "",
+          class_name: "",
+          resource_url: "",
         });
       }
     } catch (parseErr) {
@@ -212,6 +232,9 @@ function parseProxyBundle(zipBuffer) {
         async: "false",
         continue_on_error: "false",
         enabled: "true",
+        shared_flow_bundle: "",
+        class_name: "",
+        resource_url: "",
       });
     }
   }

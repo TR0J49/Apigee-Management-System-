@@ -340,7 +340,7 @@ async function fillDeployedInventory(baseUrl, headers, deployRows, allRevisionRo
         // Save policy details to proxy_policies table
         if (parsed.policyDetails && parsed.policyDetails.length > 0) {
           await pool.query(
-            "SELECT sp_upsert_proxy_policies($1, $2, $3, $4, $5, $6, $7)",
+            "SELECT sp_upsert_proxy_policies($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             [
               pair.proxyName,
               pair.revNumber,
@@ -349,6 +349,9 @@ async function fillDeployedInventory(baseUrl, headers, deployRows, allRevisionRo
               parsed.policyDetails.map((p) => p.async),
               parsed.policyDetails.map((p) => p.continue_on_error),
               parsed.policyDetails.map((p) => p.enabled),
+              parsed.policyDetails.map((p) => p.shared_flow_bundle || ""),
+              parsed.policyDetails.map((p) => p.class_name || ""),
+              parsed.policyDetails.map((p) => p.resource_url || ""),
             ]
           );
         }

@@ -190,6 +190,17 @@ app.get("/api/sharedflows/:name/revisions/:rev/policies", async (req, res) => {
   }
 });
 
+// GET /api/proxies/:name/revisions/:rev/policies — returns policies for a proxy revision
+app.get("/api/proxies/:name/revisions/:rev/policies", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM sp_get_proxy_policies($1, $2)", [req.params.name, req.params.rev]);
+    res.json({ success: true, policies: result.rows });
+  } catch (error) {
+    console.error("GET /api/proxies/:name/revisions/:rev/policies failed:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // GET /api/inventory/all — returns all inventory data for the Inventory tab (kept for export)
 app.get("/api/inventory/all", async (req, res) => {
   try {

@@ -48,6 +48,31 @@ function getPolicyIcon(policyType, policyName) {
   }
   return null;
 }
+// All policy icons available in /public
+const ALL_POLICY_ICONS = [
+  { name: "AssignMessage", icon: "/AssignMessage.png" },
+  { name: "AccessControl", icon: "/AccessControl.png" },
+  { name: "BasicAuthentication", icon: "/BasicAuthentication.png" },
+  { name: "AccessEntity", icon: "/AccessEntity.png" },
+  { name: "ExtractVariables", icon: "/ExtractVariables.png" },
+  { name: "FlowCallout", icon: "/FlowCallout.png" },
+  { name: "GenerateJWT", icon: "/GenerateJWT.png" },
+  { name: "JavaCallout", icon: "/JavaCallout.png" },
+  { name: "JavaScript", icon: "/JavaScript.png" },
+  { name: "JSONToXML", icon: "/JSONToXML.png" },
+  { name: "KeyValueMapOperations", icon: "/KeyValueMapOperations.png" },
+  { name: "MessageLogging", icon: "/MessageLogging.png" },
+  { name: "OAuthV2", icon: "/OAuthV2.png" },
+  { name: "Quota", icon: "/Quota.png" },
+  { name: "RaiseFault", icon: "/RaiseFault.png" },
+  { name: "Script", icon: "/Script.png" },
+  { name: "ServiceCallout", icon: "/ServiceCallout.png" },
+  { name: "SpikeArrest", icon: "/SpikeArrest.png" },
+  { name: "StatisticsCollector", icon: "/StatisticsCollector.png" },
+  { name: "VerifyAPIKey", icon: "/VerifyAPIKey.png" },
+  { name: "XMLToJSON", icon: "/XMLToJSON.png" },
+];
+
 const PROXY_ROWS_PER_PAGE = 50;
 const INV_ROWS_PER_PAGE = 50;
 
@@ -282,6 +307,11 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
   const [inventorySource, setInventorySource] = useState(null);
 
   const [downloading, setDownloading] = useState({});
+
+  // Policy icon click state
+  const [selectedPolicyType, setSelectedPolicyType] = useState(null);
+  const [proxyPolicies, setProxyPolicies] = useState([]);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
 
   // Sidebar tab state
   const [activeTab, setActiveTab] = useState("dashboard");
@@ -586,6 +616,35 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
     setDetailPage(null);
     setInventory(null);
     setInventorySource(null);
+    setSelectedPolicyType(null);
+    setProxyPolicies([]);
+  };
+
+  const handlePolicyIconClick = async (policyTypeName) => {
+    if (!revisionPage || !detailPage) return;
+    const isSame = selectedPolicyType === policyTypeName;
+    if (isSame) {
+      setSelectedPolicyType(null);
+      setProxyPolicies([]);
+      return;
+    }
+    setSelectedPolicyType(policyTypeName);
+    setPoliciesLoading(true);
+    try {
+      const res = await axios.get(
+        `${API_BASE}/api/proxies/${encodeURIComponent(revisionPage.proxyName)}/revisions/${detailPage.revision_number}/policies`
+      );
+      const all = res.data.policies || [];
+      const filtered = all.filter(
+        (p) => p.policy_type.toLowerCase().replace(/[\s_-]/g, "") === policyTypeName.toLowerCase().replace(/[\s_-]/g, "")
+      );
+      setProxyPolicies(filtered);
+    } catch (err) {
+      console.error("Failed to fetch proxy policies:", err.message);
+      setProxyPolicies([]);
+    } finally {
+      setPoliciesLoading(false);
+    }
   };
 
   // ==================== SHARED FLOW PAGE NAVIGATION ====================
@@ -679,12 +738,12 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
   if (detailPage) {
     return (
       <div className="overlay-page">
-        <div className="overlay-container">
+        <div className="overlay-container" style={{ maxWidth: 900 }}>
           <div className="overlay-header">
             <div>
               <h1 className="overlay-title">Revision Detail</h1>
               <p className="overlay-subtitle">
-                {revisionPage?.proxyName} - Revision {detailPage.revision_number}
+                {revisionPage?.proxyName} &middot; Revision {detailPage.revision_number}
               </p>
             </div>
             <button className="btn-back" onClick={closeDetailPage}>
@@ -693,144 +752,145 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
             </button>
           </div>
 
-          <div className="detail-grid-page">
-            <div className="detail-card-page">
-              <div className="detail-card-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/></svg>
+          <div className="revision-detail-grid">
+            <div className="revision-detail-card">
+              <div className="revision-detail-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4-4v2"/><circle cx="12" cy="7" r="4"/></svg>
               </div>
-              <span className="detail-label">Created By</span>
-              <span className="detail-value">{detailPage.created_by || "-"}</span>
+              <div className="revision-detail-content">
+                <span className="revision-detail-label">Created By</span>
+                <span className="revision-detail-value">{detailPage.created_by || "-"}</span>
+              </div>
             </div>
-            <div className="detail-card-page">
-              <div className="detail-card-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <div className="revision-detail-card">
+              <div className="revision-detail-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               </div>
-              <span className="detail-label">Created At</span>
-              <span className="detail-value">{formatEpoch(detailPage.created_at)}</span>
+              <div className="revision-detail-content">
+                <span className="revision-detail-label">Created At</span>
+                <span className="revision-detail-value">{formatEpoch(detailPage.created_at)}</span>
+              </div>
             </div>
-            <div className="detail-card-page">
-              <div className="detail-card-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            <div className="revision-detail-card">
+              <div className="revision-detail-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
               </div>
-              <span className="detail-label">Last Modified By</span>
-              <span className="detail-value">{detailPage.last_modified_by || "-"}</span>
+              <div className="revision-detail-content">
+                <span className="revision-detail-label">Last Modified By</span>
+                <span className="revision-detail-value">{detailPage.last_modified_by || "-"}</span>
+              </div>
             </div>
-            <div className="detail-card-page">
-              <div className="detail-card-icon">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <div className="revision-detail-card">
+              <div className="revision-detail-icon">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#c0392b" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               </div>
-              <span className="detail-label">Last Modified At</span>
-              <span className="detail-value">{formatEpoch(detailPage.last_modified_at)}</span>
+              <div className="revision-detail-content">
+                <span className="revision-detail-label">Last Modified At</span>
+                <span className="revision-detail-value">{formatEpoch(detailPage.last_modified_at)}</span>
+              </div>
             </div>
           </div>
 
-          {inventory && (
-            <div className="inventory-section">
-              <h3 className="inventory-section-title">
-                Proxy Bundle Inventory
-                {inventorySource && (
-                  <span className="inventory-source-tag">
-                    {inventorySource === "db" ? "from DB" : inventorySource === "cache" ? "from Cache" : "saved to DB"}
-                  </span>
-                )}
-              </h3>
-              <div className="detail-grid-page" style={{ marginBottom: 24 }}>
-                <div className="detail-card-page">
-                  <span className="detail-label">Base Path</span>
-                  <span className="detail-value" style={{ color: "#c0392b" }}>
-                    {inventory.basePaths?.join(", ") || "-"}
-                  </span>
-                </div>
-                <div className="detail-card-page">
-                  <span className="detail-label">Virtual Hosts</span>
-                  <div className="inventory-tags">
-                    {(inventory.virtualHosts || []).map((vh) => (
-                      <span className="env-tag" key={vh}>{vh}</span>
-                    ))}
-                    {(!inventory.virtualHosts || inventory.virtualHosts.length === 0) && <span className="detail-value">-</span>}
-                  </div>
-                </div>
-                <div className="detail-card-page">
-                  <span className="detail-label">Target Endpoints</span>
-                  <div className="inventory-tags">
-                    {(inventory.targetEndpoints || []).map((te) => (
-                      <span className="inventory-tag" key={te}>{te}</span>
-                    ))}
-                    {(!inventory.targetEndpoints || inventory.targetEndpoints.length === 0) && <span className="detail-value">-</span>}
-                  </div>
-                </div>
-                <div className="detail-card-page">
-                  <span className="detail-label">Proxy Endpoints</span>
-                  <div className="inventory-tags">
-                    {(inventory.proxyEndpoints || []).map((pe) => (
-                      <span className="inventory-tag" key={pe}>{pe}</span>
-                    ))}
-                    {(!inventory.proxyEndpoints || inventory.proxyEndpoints.length === 0) && <span className="detail-value">-</span>}
-                  </div>
-                </div>
-              </div>
-
-              {inventory.flows && inventory.flows.length > 0 && (
-                <div style={{ marginBottom: 24 }}>
-                  <h3 className="inventory-section-title">
-                    Flows <span className="badge">{inventory.flows.length}</span>
-                  </h3>
-                  <div className="table-wrapper">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>Flow Name</th>
-                          <th>Full Path</th>
-                          <th>Path Suffix</th>
-                          <th>Policies</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {inventory.flows.map((f, i) => (
-                          <tr key={i}>
-                            <td className="proxy-name-cell">{f.name || "-"}</td>
-                            <td><code style={{ background: "#f5f5f5", padding: "2px 8px", borderRadius: 4, fontSize: 13 }}>{f.fullPath || "-"}</code></td>
-                            <td>{f.hasPathSuffix === "y" ? <span className="env-tag">{f.pathSuffix}</span> : <span style={{ color: "#aaa" }}>none</span>}</td>
-                            <td>
-                              <div className="inventory-tags">
-                                {(f.policies || []).map((p, j) => (
-                                  <span className="inventory-tag-policy" key={j}>{p}</span>
-                                ))}
-                                {(!f.policies || f.policies.length === 0) && <span style={{ color: "#aaa" }}>-</span>}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {inventory.policies && inventory.policies.length > 0 && (
-                <div>
-                  <h3 className="inventory-section-title">
-                    All Policies <span className="badge">{inventory.policies.length}</span>
-                  </h3>
-                  <div className="inventory-tags" style={{ gap: 8 }}>
-                    {inventory.policies.map((p) => (
-                      <span
-                        className={inventory.usedPolicies?.includes(p) ? "inventory-tag-policy" : "inventory-tag-unused"}
-                        key={p}
-                        title={inventory.usedPolicies?.includes(p) ? "Used in flows" : "Not referenced in proxy flows"}
-                      >
-                        {p}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+          <div className="policy-icons-section">
+            <h3 className="policy-icons-title">Policies</h3>
+            <div className="policy-icons-row">
+              {ALL_POLICY_ICONS.map((p) => (
+                <button
+                  className={`policy-icon-btn${selectedPolicyType === p.name ? " policy-icon-btn-active" : ""}`}
+                  key={p.name}
+                  title={p.name}
+                  onClick={() => handlePolicyIconClick(p.name)}
+                >
+                  <img src={p.icon} alt={p.name} />
+                </button>
+              ))}
             </div>
-          )}
+          </div>
 
-          {!inventory && !loading.detail && (
-            <div style={{ textAlign: "center", padding: "20px 0", color: "#aaa", fontSize: 14 }}>
-              Loading proxy bundle inventory...
+          <div className="apigee-flow-section">
+            <div className="apigee-flow-bar apigee-flow-request">
+              <div className="apigee-flow-line">
+                <div className="apigee-flow-line-inner"></div>
+                <span className="apigee-flow-center-label apigee-flow-center-request">
+                  {selectedPolicyType && policiesLoading && (
+                    <img className="apigee-flow-icon" src={ALL_POLICY_ICONS.find(p => p.name === selectedPolicyType)?.icon} alt="" />
+                  )}
+                  Request
+                </span>
+                <div className="apigee-flow-line-inner"></div>
+                <svg className="apigee-flow-arrow" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
+              </div>
+            </div>
+            <div className="apigee-flow-bar apigee-flow-response">
+              <div className="apigee-flow-line">
+                <svg className="apigee-flow-arrow" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19 12H5M11 19l-7-7 7-7"/></svg>
+                <div className="apigee-flow-line-inner"></div>
+                <span className="apigee-flow-center-label apigee-flow-center-response">
+                  Response
+                  {selectedPolicyType && !policiesLoading && proxyPolicies.length >= 0 && (
+                    <img className="apigee-flow-icon" src={ALL_POLICY_ICONS.find(p => p.name === selectedPolicyType)?.icon} alt="" />
+                  )}
+                </span>
+                <div className="apigee-flow-line-inner"></div>
+              </div>
+            </div>
+            {selectedPolicyType && !policiesLoading && (
+              <div className="apigee-flow-response-icon">
+                <img src={ALL_POLICY_ICONS.find(p => p.name === selectedPolicyType)?.icon} alt={selectedPolicyType} />
+                <span>{selectedPolicyType}</span>
+                <span className="apigee-flow-response-count">{proxyPolicies.length} found</span>
+              </div>
+            )}
+          </div>
+
+          {selectedPolicyType && (
+            <div className="policy-results-section">
+              <div className="policy-results-header">
+                <h3 className="policy-results-title">
+                  {selectedPolicyType}
+                  <span className="badge">{proxyPolicies.length}</span>
+                </h3>
+                <button className="policy-results-close" onClick={() => { setSelectedPolicyType(null); setProxyPolicies([]); }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+              {policiesLoading ? (
+                <div style={{ textAlign: "center", padding: "24px 0", color: "#888" }}>
+                  <div className="spinner"></div>
+                  <p style={{ marginTop: 8 }}>Loading policies...</p>
+                </div>
+              ) : proxyPolicies.length > 0 ? (
+                <div className="policy-table-scroll">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>#</th>
+                        <th>Policy Name</th>
+                        <th>Policy Type</th>
+                        <th>SharedFlowBundle</th>
+                        <th>ClassName</th>
+                        <th>ResourceURL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {proxyPolicies.map((p, i) => (
+                        <tr key={p.policy_name}>
+                          <td style={{ color: "#aaa", fontSize: 12 }}>{i + 1}</td>
+                          <td className="proxy-name-cell">{p.policy_name}</td>
+                          <td><span className="inventory-tag-policy">{p.policy_type || "-"}</span></td>
+                          <td>{p.shared_flow_bundle || <span style={{ color: "#ccc" }}>-</span>}</td>
+                          <td>{p.class_name || <span style={{ color: "#ccc" }}>-</span>}</td>
+                          <td>{p.resource_url || <span style={{ color: "#ccc" }}>-</span>}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", padding: "24px 0", color: "#aaa", fontSize: 14 }}>
+                  No {selectedPolicyType} policies found for this revision.
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1185,7 +1245,7 @@ function Dashboard({ syncVersion, isSyncing, triggerSync }) {
                     <tbody>
                       {proxies.map((p, i) => (
                         <tr key={p.proxy_name}>
-                          <td style={{ color: "#aaa", fontSize: 12 }}>{(currentPage - 1) * PROXY_ROWS_PER_PAGE + i + 1}</td>
+                          <td style={{ color: "#aaa", fontSize: 12 }}>{p.id}</td>
                           <td className="proxy-name-cell">{p.proxy_name}</td>
                           <td>{new Date(p.timestamp).toLocaleString()}</td>
                           <td>

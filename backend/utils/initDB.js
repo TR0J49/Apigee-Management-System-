@@ -287,6 +287,32 @@ async function initDB() {
     $$ LANGUAGE plpgsql
   `);
 
+  // 9b. Get revisions for a proxy with server-side pagination
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION sp_get_revisions_paginated(
+      p_proxy_name TEXT,
+      p_limit INT DEFAULT 20,
+      p_offset INT DEFAULT 0
+    )
+    RETURNS TABLE(revision_number TEXT, total_count BIGINT) AS $$
+    BEGIN
+      RETURN QUERY
+      WITH filtered AS (
+        SELECT r.revision_number
+        FROM revisions r JOIN proxies p ON p.id = r.proxy_id
+        WHERE p.proxy_name = p_proxy_name
+      ),
+      counted AS (
+        SELECT COUNT(*) AS cnt FROM filtered
+      )
+      SELECT f.revision_number, c.cnt AS total_count
+      FROM filtered f, counted c
+      ORDER BY f.revision_number::int ASC
+      LIMIT p_limit OFFSET p_offset;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
   // 10. Get revision detail
   await pool.query(`
     CREATE OR REPLACE FUNCTION sp_get_revision_detail(p_proxy_name TEXT, p_rev_number TEXT)

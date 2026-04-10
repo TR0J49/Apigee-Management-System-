@@ -25,6 +25,36 @@ router.get("/:proxyName/revisions", async (req, res) => {
   }
 });
 
+// GET /api/proxies/:proxyName/revisions/paginated — server-side paginated revision list
+router.get("/:proxyName/revisions/paginated", async (req, res) => {
+  try {
+    const { proxyName } = req.params;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
+    const result = await pool.query(
+      "SELECT * FROM sp_get_revisions_paginated($1, $2, $3)",
+      [proxyName, limit, offset]
+    );
+
+    const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0;
+    const rows = result.rows.map(({ total_count, ...rest }) => rest);
+
+    res.json({
+      success: true,
+      revisions: rows,
+      total: totalCount,
+      page,
+      limit,
+      totalPages: Math.ceil(totalCount / limit),
+    });
+  } catch (error) {
+    console.error("GET revisions/paginated failed:", error.message);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
 // GET /api/proxies/:proxyName/revisions/:revNumber — Lazy load from Apigee
 router.get("/:proxyName/revisions/:revNumber", async (req, res) => {
   try {

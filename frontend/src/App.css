@@ -1389,12 +1389,42 @@ tr.row-selected td {
   margin-bottom: 14px;
 }
 
+.policy-icons-slider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.policy-slider-btn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  color: #555;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.policy-slider-btn:hover {
+  background: #c0392b;
+  color: #fff;
+  border-color: #c0392b;
+}
+
 .policy-icons-row {
   display: flex;
   flex-wrap: nowrap;
   gap: 10px;
   overflow-x: auto;
   padding: 4px 2px 6px;
+  flex: 1;
+  min-width: 0;
   scrollbar-width: none;
 }
 

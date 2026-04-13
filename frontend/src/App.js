@@ -33,7 +33,8 @@ function App() {
     if (syncInProgress.current) return;
     syncInProgress.current = true;
     setIsSyncing(true);
-    axios.post("/api/sync", {}, { timeout: 0 })
+    const apiBase = process.env.REACT_APP_API_BASE || "";
+    axios.post(`${apiBase}/api/sync`, {}, { timeout: 0 })
       .then(() => {
         setSyncVersion((v) => v + 1);
       })
@@ -45,7 +46,7 @@ function App() {
   }, []);
 
   return (
-    <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <Router basename={process.env.REACT_APP_API_BASE || "/"} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Navbar isLoggedIn={isLoggedIn} onLogin={handleLogin} onLogout={handleLogout} onSyncComplete={handleSyncComplete} onSyncStart={() => setIsSyncing(true)} onSyncEnd={() => setIsSyncing(false)} />
       <Routes>
         <Route path="/" element={<Home isLoggedIn={isLoggedIn} />} />

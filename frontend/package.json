@@ -2,6 +2,7 @@
   "name": "apigee-inventory-frontend",
   "version": "1.0.0",
   "private": true,
+  "homepage": "/apigee",
   "dependencies": {
     "axios": "^1.7.2",
     "react": "^18.3.1",

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import axios from "axios";
 
-const API_BASE = "";
+const API_BASE = process.env.REACT_APP_API_BASE || "";
 
 // Map Apigee policy type to icon file in /public
 const POLICY_ICON_MAP = {

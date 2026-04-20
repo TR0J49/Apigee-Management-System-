@@ -5,13 +5,15 @@ services:
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: proxy
+      POSTGRES_DB: provoapigee
+      TZ: Asia/Kolkata
+      PGTZ: Asia/Kolkata
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d proxy"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d provoapigee"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -24,12 +26,13 @@ services:
     volumes:
       - ./backend/downloads:/app/downloads
     environment:
+      TZ: Asia/Kolkata
       PORT: 5000
       PG_HOST: postgres
       PG_PORT: 5432
       PG_USER: postgres
       PG_PASSWORD: postgres
-      PG_DATABASE: proxy
+      PG_DATABASE: provoapigee
       APIGEE_TOKEN_URL: https://icici-bank-azure-test.login.apigee.com/oauth/token
       APIGEE_CLIENT_ID: edgecli
       APIGEE_CLIENT_SECRET: edgeclisecret

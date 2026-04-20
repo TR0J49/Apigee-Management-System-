@@ -46,7 +46,7 @@ function App() {
   }, []);
 
   return (
-    <Router basename={process.env.REACT_APP_API_BASE || "/"} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <Router basename={process.env.PUBLIC_URL || "/"} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Navbar isLoggedIn={isLoggedIn} onLogin={handleLogin} onLogout={handleLogout} onSyncComplete={handleSyncComplete} onSyncStart={() => setIsSyncing(true)} onSyncEnd={() => setIsSyncing(false)} />
       <Routes>
         <Route path="/" element={<Home isLoggedIn={isLoggedIn} />} />
